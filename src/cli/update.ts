@@ -6,8 +6,22 @@ import { serverVersion } from '../version.js';
 import { parseVersion, isNewer } from '../services/update-check.js';
 import { FLEET_DIR } from '../paths.js';
 import { readInstallConfig } from './config.js';
+import { isSea, isNpmGlobalInstall } from './install.js';
 
 export async function runUpdate(): Promise<void> {
+  if (!isSea()) {
+    if (isNpmGlobalInstall()) {
+      console.log('apra-fleet is installed via npm. To update, run:');
+      console.log('  npm update -g @apralabs/apra-fleet');
+      console.log('');
+      console.log('After updating, re-install skills and hooks:');
+      console.log('  apra-fleet install');
+    } else {
+      console.log('apra-fleet is running in dev mode. Pull the latest source and rebuild.');
+    }
+    return;
+  }
+
   console.log(`Checking for updates...`);
 
   try {
@@ -50,7 +64,7 @@ export async function runUpdate(): Promise<void> {
       return;
     }
 
-    console.log(`Updating to ${tagName} — restarting...`);
+    console.log(`Updating to ${tagName} -- restarting...`);
 
     const tmpPath = path.join(os.tmpdir(), assetName);
     const downloadRes = await fetch(asset.browser_download_url);
@@ -75,14 +89,20 @@ export async function runUpdate(): Promise<void> {
 
     const config = readInstallConfig();
     const providers = Object.keys(config.providers);
-    
+
     let targetLlm = 'claude';
     let targetSkill = 'all';
+    // workflowsMode is optional for backward compatibility -- install-config.json
+    // files written before the workflow subsystem existed won't have this field;
+    // default to 'all' so those installs get workflows on the first update after
+    // upgrading, same as a fresh install (see config.ts MultiProviderInstallConfig).
+    let targetWorkflowsMode: 'all' | 'none' = 'all';
 
     const configPath = path.join(FLEET_DIR, 'install-config.json');
     if (providers.length > 0) {
       targetLlm = providers[0];
       targetSkill = config.providers[targetLlm].skill;
+      targetWorkflowsMode = config.providers[targetLlm].workflowsMode ?? 'all';
     } else if (!fs.existsSync(configPath)) {
       console.warn(`Warning: install-config.json missing, using defaults.`);
     } else {
@@ -91,12 +111,15 @@ export async function runUpdate(): Promise<void> {
 
     // --force so the spawned installer stops the running server before
     // replacing the binary; without it the running-process guard aborts.
-    const args = ['install', '--force', '--llm', targetLlm, '--skill', targetSkill];
+    // --workflows threads the persisted workflowsMode back in so a prior
+    // `--workflows none` choice survives an update instead of silently
+    // reverting to the `all` default on re-install (apra-fleet-7pm.10).
+    const args = ['install', '--force', '--llm', targetLlm, '--skill', targetSkill, '--workflows', targetWorkflowsMode];
     const installer = spawn(tmpPath, args, { detached: true, stdio: 'ignore' });
     installer.unref();
     process.exit(0);
 
   } catch (e) {
-    console.error(`Error: Update failed — ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`Error: Update failed -- ${e instanceof Error ? e.message : String(e)}`);
   }
 }

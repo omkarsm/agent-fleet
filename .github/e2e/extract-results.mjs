@@ -66,6 +66,26 @@ function processRawFile(filePath, provider) {
     };
   }
 
+  if (provider === 'opencode') {
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let obj;
+      try { obj = JSON.parse(trimmed); } catch { continue; }
+      if (obj.type === 'text' && obj.part?.text) {
+        assistantText += '\n' + obj.part.text;
+      }
+      if (obj.type === 'step_finish' && obj.part?.tokens) {
+        const t = obj.part.tokens;
+        tokensIn += (t.input ?? 0);
+        tokensOut += (t.output ?? 0);
+        cacheCreate += (t.cache?.write ?? 0);
+        cacheRead += (t.cache?.read ?? 0);
+      }
+    }
+    return { assistantText, tokensIn, tokensOut, cacheCreate, cacheRead };
+  }
+
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -128,10 +148,10 @@ for (let i = 0; i < rawFiles.length; i++) {
 // Sum member telemetry from ground-truth JSONL logs
 const telemetry = [...pmPhases];
 
-function sumMemberLogs(role) {
+function sumMemberLogs(memberName) {
   let in_t = 0;
   let out_t = 0;
-  const dir = join(runDir, 'logs', role);
+  const dir = join(runDir, 'logs', memberName);
   if (existsSync(dir)) {
     for (const file of readdirSync(dir)) {
       if (file.endsWith('.jsonl')) {
@@ -140,9 +160,11 @@ function sumMemberLogs(role) {
           if (!line.trim()) continue;
           try {
             const entry = JSON.parse(line);
-            if (entry.tokens) {
-              in_t += (entry.tokens.input ?? entry.tokens.input_tokens ?? 0);
-              out_t += (entry.tokens.output ?? entry.tokens.output_tokens ?? 0);
+            // Claude session JSONL: usage lives on assistant events at
+            // message.usage.{input,output}_tokens, not a top-level "tokens" field.
+            if (entry.type === 'assistant' && entry.message?.usage) {
+              in_t += (entry.message.usage.input_tokens ?? 0);
+              out_t += (entry.message.usage.output_tokens ?? 0);
             }
           } catch {}
         }
@@ -152,8 +174,8 @@ function sumMemberLogs(role) {
   return { tokens_in: in_t, tokens_out: out_t };
 }
 
-telemetry.push({ role: 'doer', ...sumMemberLogs('doer') });
-telemetry.push({ role: 'reviewer', ...sumMemberLogs('reviewer') });
+telemetry.push({ role: 'doer', ...sumMemberLogs('alice') });
+telemetry.push({ role: 'reviewer', ...sumMemberLogs('bella') });
 
 // Extract checkpoints: one JSON object per "CHECKPOINT:" line (text-based, legacy)
 let checkpoints = [];

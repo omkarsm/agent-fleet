@@ -1,4 +1,4 @@
-import type { ProviderAdapter, PromptOptions, ParsedResponse } from './provider.js';
+import type { ProviderAdapter, PromptOptions, ParsedResponse, WorkspaceTrustExecFn, EnsureWorkspaceTrustedResult, SessionIdStrategy, TargetOS } from './provider.js';
 import type { LlmProvider, SSHExecResult } from '../types.js';
 import type { PromptErrorCategory } from '../utils/prompt-errors.js';
 import { escapeDoubleQuoted } from '../os/os-commands.js';
@@ -98,6 +98,18 @@ export class CopilotProvider implements ProviderAdapter {
     return false;
   }
 
+  sessionIdStrategy(): SessionIdStrategy {
+    return { type: 'provider-minted' };
+  }
+
+  resolveSessionLogPath(_sessionId: string, _workFolder: string, _homeDir?: string | null, _targetOs?: TargetOS): string {
+    return '';
+  }
+
+  resolveSessionLogDir(_workFolder: string, _homeDir?: string | null, _targetOs?: TargetOS): string | null {
+    return null;
+  }
+
   resumeFlag(_sessionId?: string): string {
     return '--continue';
   }
@@ -110,9 +122,9 @@ export class CopilotProvider implements ProviderAdapter {
     };
   }
 
-  modelForTier(tier: 'cheap' | 'mid' | 'premium'): string {
+  modelForTier(tier: 'cheap' | 'standard' | 'premium'): string {
     if (tier === 'cheap') return 'claude-haiku-4-5';
-    if (tier === 'mid') return 'claude-sonnet-4-5';
+    if (tier === 'standard') return 'claude-sonnet-4-5';
     return 'claude-opus-4-5';
   }
 
@@ -194,6 +206,14 @@ export class CopilotProvider implements ProviderAdapter {
 
   headlessInvocation(promptLiteral: string): string {
     return `-p "${promptLiteral}"`;
+  }
+
+  async ensureWorkspaceTrusted(_workFolder: string, _execCommand: WorkspaceTrustExecFn, _agentOs?: 'linux' | 'macos' | 'windows'): Promise<EnsureWorkspaceTrustedResult> {
+    // apra-fleet-eft.40 was scoped to the Claude workspace-trust gate (see the
+    // provider-trust-matrix note on the parent bug); Copilot was not part of that
+    // investigation and no equivalent per-project trust gate is known. No-op until a
+    // Copilot-specific gate is live-verified.
+    return { seeded: false, detail: 'copilot: no known per-project trust gate' };
   }
 }
 

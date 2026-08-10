@@ -1,289 +1,313 @@
 <project title="Apra Fleet" summary="AI-managed fleet orchestration for Claude Code, Gemini, and Antigravity (agy) -- run, update, and coordinate multiple LLM agents from a single hub.">
   <docs>
   <doc title="Readme" desc="Project overview, installation, member registration, and day-to-day usage for operators.">
-# Apra Fleet
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/marketing/hero-banner-dark.svg">
+  <img src="assets/marketing/hero-banner-light.svg" alt="apra-fleet: run a fleet of AI agents across your devices, your providers, your workflows." width="100%">
+</picture>
+
+# apra-fleet
+
+**Run a fleet of AI agents across your devices, your providers, your workflows.**
+
+What Kubernetes did for containers, apra-fleet does for AI agents:
+scheduling, credentials, isolation, and observability for an agentic
+workforce -- on any machine, anywhere, using every LLM provider at once.
 
 [![CI](https://github.com/Apra-Labs/apra-fleet/actions/workflows/ci.yml/badge.svg)](https://github.com/Apra-Labs/apra-fleet/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](https://github.com/Apra-Labs/apra-fleet/releases)
 [![MCP](https://img.shields.io/badge/MCP-compatible-8A2BE2.svg)](https://modelcontextprotocol.io)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Apra-Labs/apra-fleet)
 
-### One goal. A team of AI agents that plan, execute, and review each other's work, and run across every machine you own.
+[Quick Start](#quick-start-5-minutes) - [Live Demo](#watch-a-fleet-work) - [How It Works](#how-it-works) - [fleet-sprint Getting Started Guide](docs/fleet-sprint-getting-started.md) - [Website](https://apra-labs.github.io/apra-fleet)
 
-Apra Fleet is an open-source **MCP server** that turns AI agents (Claude
-Code, Antigravity, Codex, Copilot, Gemini) into a coordinated team instead of a lone
-assistant. Any job that needs more than one agent -- software sprints,
-customer-support triage, cost and operations-efficiency analysis,
-infrastructure surveys -- becomes a fleet you direct in plain conversation.
-Need more horsepower? Fleet reaches across every machine on your network
-over SSH -- no dashboards, no orchestration YAML.
-
-**The agents need not share a vendor.** A Claude agent and an Antigravity agent can
-work the same sprint -- one writes, the other reviews -- so a different model,
-with different blind spots, checks every change. Cross-provider collaboration is
-a built-in quality mechanism, not an afterthought.
-
-> A *member* is one working folder plus one LLM CLI -- local or remote.
-> A fleet is however many of those you register, working in concert.
-
-### Watch a real run (3 min)
-
-[![Apra Fleet -- a doer-reviewer sprint, start to finish](https://img.youtube.com/vi/SGdHvIkSbY8/hqdefault.jpg)](https://youtu.be/SGdHvIkSbY8)
-
-Two agents ship a feature end to end: one plans and writes, the other reviews,
-findings loop back, and a clean diff lands -- driven by the **PM skill**. That is
-*one* of the workflows Fleet makes possible; the rest are below.
+</div>
 
 ---
 
-## See it in one example
+<img src="assets/marketing/dashboard-demo.gif" alt="apra-fleet fleet-sprint dashboard, real recording: the sprint's own integration tester finds two real bugs, files them against itself, then a second cycle plans, fixes, and closes them -- captions burned in." width="100%">
 
-```
-/pm add 2 local members at c:\projects cloned from <git-url> -- a developer and a reviewer -- and pair them
-/pm init project_icarus
-/pm plan ./feature.md
-/pm start the implementation sprint
-/pm status
-```
+> **This repository is built by the product you are looking at.** An
+> autonomous apra-fleet workflow plans, codes, reviews, tests, and ships
+> this codebase in multi-hour sprints -- filing bugs against itself and
+> fixing them. The recording above is a real run, not a mockup.
 
-You describe the goal, approve the plan once, and Fleet runs the doer-reviewer loop to a reviewed PR.
+---
 
-## Quick start
+## Why a fleet?
 
-Copy-paste the one-liner for your platform:
+Running one AI agent is a demo. Running fifty -- across a MacBook in the
+office, a GPU box in the lab, three cloud VMs, and your CI -- is an
+operations problem nobody else has solved:
 
-**macOS (Apple Silicon)**
-```bash
-curl -fsSL https://github.com/Apra-Labs/apra-fleet/releases/latest/download/apra-fleet-installer-darwin-arm64 -o apra-fleet-installer && chmod +x apra-fleet-installer && ./apra-fleet-installer install
-```
+- **Which machine runs which agent?** Real devices, not throwaway sandboxes:
+  registered, credentialed, health-checked members you already own.
+- **Which model does which job?** Claude for review, a cheap tier for
+  mechanical edits, a local vLLM model for private data -- all in one fleet,
+  routed by cost tier, switchable per task.
+- **Who watches the agents?** Durable workflows with supervisors, watchdogs,
+  reservations, and live dashboards. Agents that die get detected. Work that
+  stalls gets resumed. Nothing runs silently.
+- **Who holds the keys?** Secrets entered out-of-band, never visible to any
+  model. Per-provider permission composition. Network egress policy per
+  credential.
 
-**Linux (x64)**
-```bash
-curl -fsSL https://github.com/Apra-Labs/apra-fleet/releases/latest/download/apra-fleet-installer-linux-x64 -o apra-fleet-installer && chmod +x apra-fleet-installer && ./apra-fleet-installer install
-```
+One control plane. Any device. Any model. Any workflow. Any domain.
 
-**Windows (x64)** -- run in PowerShell:
-```powershell
-Invoke-WebRequest -Uri https://github.com/Apra-Labs/apra-fleet/releases/latest/download/apra-fleet-installer-win-x64.exe -OutFile apra-fleet-installer.exe; .\apra-fleet-installer.exe install
-```
+## What you get
 
-> Installing for **Antigravity**, Codex, Copilot, or Gemini instead of Claude? Add the
-> `--llm` flag -- see
-> [Install for other providers](docs/install.md#install-for-other-providers-antigravity-codex-copilot-gemini).
+| Pillar | Concretely |
+|---|---|
+| **Any device** | Register any Windows / macOS / Linux machine (local or over SSH) as a fleet member in one command. Cloud members auto-start on demand. |
+| **Any model** | Claude, Codex, Gemini, Copilot, Antigravity, local models (any OpenAI-compatible endpoint via OpenCode) -- mixed freely. Tier-based routing (cheap / standard / premium) keeps cost governance built in. Cross-provider review is a quality mechanism: a different model, with different blind spots, checks every change. |
+| **Any workflow** | Workflows are durable programs, not prompt chains: multi-hour, resumable, observable, with member reservations and atomic state. Write your own; ship it to the fleet. |
+| **Any domain** | Not just software development. The pattern fits wherever work decomposes into agent-sized pieces that need orchestration and an audit trail: nightly retail replenishment (reconcile inventory deltas, draft purchase orders for sign-off), logistics exception handling (triage a delayed shipment, re-book, notify), healthcare intake (summarize referrals, check completeness, route), back-office runs (invoice matching, compliance evidence collection). Software engineering is the vertical running today -- your domain is a workflow away. |
 
-Then load it in your favorite LLM CLI (claude, agy, gemini, ...) using `/mcp`.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/marketing/fleet-topology-dark.svg">
+  <img src="assets/marketing/fleet-topology-light.svg" alt="apra-fleet topology: one control plane dispatching to six heterogeneous member devices across providers and operating systems" width="100%">
+</picture>
 
-Now register your first members:
+## Watch a fleet work
 
-> "Register a local member called `doer`. Register another called `reviewer`.
-> Pair them."
+Our flagship workflow, **fleet-sprint**, develops software autonomously:
+plan -> develop -> review -> deploy -> integration-test -> harvest, in
+cycles, until the goal is met or the evidence says stop.
 
-Verify it worked:
+It is not a toy. It builds apra-fleet itself:
 
-> "Show me fleet status."
-
-You should see both members listed with status online or idle.
-
-Add remote machines whenever you are ready:
-
-> "Register 192.168.1.10 as `build-server`. Username akhil, work folder
-> `/home/akhil/projects/myapp`."
-
-Fleet securely collects the machine's password out-of-band -- you type it into a
-separate terminal, never the chat -- uses it once to set up SSH key-based auth,
-then forgets it. Every connection after that is key-based.
-
-Intel Mac users: build from source -- see [Development](#development).
-Install details (what it writes, the `--skill` flag, uninstall) are in
-[docs/install.md](docs/install.md).
-
-**Staying current is one command.** `apra-fleet update` checks GitHub for the
-latest release and installs it in place -- or tells you that you are already up
-to date. See [keeping Fleet updated](docs/features/update.md).
-
-## How it works
-
-```mermaid
-sequenceDiagram
-    actor You
-    participant PM as PM (orchestrator)
-    participant Doer
-    participant Reviewer
-    You->>PM: "Add a note sharing system, have it reviewed"
-    loop Plan: revise until the reviewer signs off
-        PM->>Doer: draft / revise the plan
-        Doer-->>PM: plan
-        PM->>Reviewer: review the plan
-        Reviewer-->>PM: rejected with fixes, or signed off
-    end
-    PM-->>You: plan for approval
-    You-->>PM: approved
-    loop Build: revise until the review is clean
-        PM->>Doer: execute / fix the task
-        Doer->>Doer: write code, commit, reach checkpoint
-        PM->>Reviewer: review the changes
-        Reviewer-->>PM: findings, or signed off
-    end
-    PM-->>You: reviewed code + PR
-```
-
-A sprint runs in two reviewed phases: the **plan** is drafted, reviewed, and
-approved by you before any code is written; then the **build** is executed and
-every phase of development is reviewed against all the project documents
-(requirements, plan, design, etc.). The PM orchestrator talks to members through Fleet's MCP
-tools; Fleet carries the work to each member -- locally as a child process, or
-remotely over SSH. Agents sync state through git (`PLAN.md`, `progress.json`,
-`feedback.md`), so progress survives restarts.
-
-## What you can build on top
-
-Fleet is a coordination layer. The **PM skill** is its reference workflow library
-and ships today; the rest are recipes you assemble with the same tools.
-
-| Workflow | What it does | Status |
-|----------|--------------|--------|
-| **Doer / Reviewer** | Two agents pair: one writes, one reviews against a quality bar. | Ships (PM skill) |
-| **Plan / execute / verify** | Break work into steps, approve the plan, agents pause at checkpoints. | Ships (PM skill) |
-| **Pipeline** | Agent A extracts, B transforms, C ships -- handoff by file. | Recipe |
-| **Specialist routing** | Route Python work to a py-agent, Rust to a rust-agent. | Recipe |
-| **Parallel exploration** | Three agents try three approaches; you merge the winner. | Recipe |
-| **Cross-machine** | Build on Linux, test on Windows, deploy from a Mac. | Recipe |
-
-To write your own skill, see [docs/writing-skills.md](docs/writing-skills.md).
-
-## Use cases
-
-- Run your test suite on a Linux box while you develop on macOS.
-- Have one agent build the frontend, another the backend, a third running tests
-  -- all in parallel.
-- Use a beefy cloud VM for compilation while coding from your laptop.
-- Spin up isolated workspaces on one machine without them stepping on each other.
-- Customer-support triage: agents classify, draft replies, and escalate
-  tickets in parallel.
-- Cost and operations-efficiency analysis: fan out data gathering across
-  sources, consolidate findings.
-- Infrastructure surveys, log triage, and patch fan-out across many
-  machines.
-
-## Cost
-
-Multi-agent tooling raises one question first: does coordinating several agents
-burn more tokens? In practice Fleet works to keep usage down -- and the core
-idea is the one Fleet was built on: **match the model to the task.**
-
-A plan is a list of tasks of widely varying difficulty. Running every one of
-them on a single premium model is the waste. Instead, Fleet assigns each task a
-model tier commensurate with its complexity:
-
-- **cheap** -- boilerplate, status checks, running tests, deploys
-- **standard** -- routine feature work, code, configuration
-- **premium** -- planning, review, hard architectural reasoning
-
-Only the work that genuinely needs a frontier model gets one; everything else
-runs on a lighter, cheaper tier. Two more mechanisms compound the savings:
-
-- **Shell over prompts** -- routine steps run through `execute_command` as plain
-  shell commands, which cost zero LLM tokens.
-- **Smart sessions** -- Fleet decides whether to resume an existing session
-  (reusing cached context) or start fresh, rather than re-sending history.
-
-**Token spend is measured, not estimated.** Fleet records token usage per
-member and per role -- PM, doer, reviewer -- so a team can see and analyze
-where their spend actually goes. Fleet's end-to-end CI suite exercises this
-in full: a complete reviewed sprint -- discover issues, plan, doer-reviewer
-loop, PR raised with green CI -- emits a per-role token breakdown (in one
-such run: PM ~6K, doer ~191K, reviewer ~19K, ~215K total). Those toy-repo
-figures are not a benchmark -- they show the measurement method works end
-to end. The point is the instrument: Fleet makes token cost something you
-can attribute and reason about, not guess at.
-
-Setup is a one-time cost; the recurring cost is the work itself. See the
-[FAQ](docs/FAQ.md) for the full breakdown.
-
-## Compare to alternatives
-
-| Tool | Overlap | Where Fleet differs |
-|------|---------|---------------------|
-| Single-agent coding assistants | AI writes code | Fleet adds a second agent that reviews before you do. |
-| CI self-hosted runners | Runs work on other machines | Fleet is conversational and stateful, not pipeline-triggered. |
-| SkyPilot / dstack | Multi-machine compute | Fleet coordinates *agents and their context*, not just jobs. |
-| Google A2A | Agent-to-agent messaging | Fleet is an opinionated workflow layer, not just a transport. |
-
-When *not* to use Fleet: a one-off single-file change needs no second agent.
-
-## Mix providers in one fleet
-
-Every member runs its own LLM backend, and they collaborate across vendors. Put
-a Claude doer with an Antigravity reviewer, or the reverse - the reviewer's model
-disagrees with the doer's by construction, so it catches issues a same-model
-review would wave through. Mix by role:
-
-| Role | Recommended | Why |
-|------|-------------|-----|
-| PM (orchestrator) | Claude Code or Antigravity (agy) | Both plan and orchestrate well - both support planning, background tasks, and premium models (e.g., Opus / premium-tier). |
-| Doer | Any provider | Sonnet, Antigravity, Codex, Copilot, Gemini - mix freely. |
-| Reviewer | Premium-tier models | Catches subtle issues smaller models miss. |
+- Multi-cycle sprints running for hours, unattended
+- 2,300+ unit tests and an 81-file integration suite against real backends
+- Files bugs against itself, decomposes them, fixes them, and blocks its
+  own release until quality gates pass
+- Every dispatch, verdict, and dollar visible live on the dashboard
+- Every sprint's raw child stdout/stderr is captured to a per-sprint log
+  and linked from the dashboard, so a run's output is traceable even if it
+  crashes before reporting anything back
 
 A fleet that has run in production:
 
 ```
-pm-1      Opus 4.7        orchestrator
-doer-1    Sonnet 4.6      feature work
-doer-2    Antigravity     large-context tasks
-reviewer  Opus 4.7        final review
+pm-1      Opus (premium)      orchestrator
+doer-1    Sonnet (standard)   feature work
+doer-2    Antigravity         large-context tasks
+reviewer  Opus (premium)      final review
 ```
 
-Provider strengths, role recommendations, and gotchas:
-[docs/provider-guide.md](docs/provider-guide.md).
+The engine does not know what a "sprint" is; it knows how to run your
+workflow reliably across your fleet (see **Any domain** above).
 
-## The PM skill
+## Quick start (5 minutes)
 
-The **PM skill** is Fleet's reference workflow for **software development**
--- it ships today, fully built out. It is one skill on a general
-substrate: the same primitives -- members, tasks, git/SSH transport,
-doer-reviewer pairing -- coordinate agents for support triage, cost
-analysis, ops surveys, or any multi-agent job. PM is the worked example;
-the platform is the point.
+**1. Install** -- one command via npm (Node.js 22+), or grab the
+standalone installer binary for your platform from
+[Releases](https://github.com/Apra-Labs/apra-fleet/releases) and
+double-click it (installation is the default action):
 
-The Project Manager skill is installed by default and drives structured,
-multi-step work: planning with your approval, doer-reviewer loops, verification
-checkpoints, and git-synced progress. Task state persists across sessions via
-[**Beads**](docs/beads.md), the bundled open-source issue tracker (`bd` CLI, installed alongside Fleet) -- run `bd ready` any time to see
-what is in flight.
+```bash
+npm install -g @apralabs/apra-fleet
+apra-fleet                   # installs for Claude Code (default)
+apra-fleet --llm agy         # or OpenCode/Codex/Copilot/Gemini
+cd ~/.apra-fleet/bin && apra-fleet start             # start the apra-fleet
+```
 
-| Command | Does |
-|---------|------|
-| `/pm init <project>` | Initialize a project folder and templates. |
-| `/pm pair <member> <member>` | Pair a doer with a reviewer. |
-| `/pm plan <requirement>` | Draft a plan for your approval. |
-| `/pm start <member>` | Begin execution; dispatches doer with plan and task harness. |
-| `/pm status <member>` | Check in-flight tasks, progress, and git log. |
-| `/pm resume <member>` | Resume after a verification checkpoint. |
-| `/pm deploy <member>` | Execute the project deployment runbook. |
-| `/pm recover <project>` | Re-orient after a PM restart; reads in-flight tasks and member state. |
-| `/pm cleanup <project>` | Finish the sprint, close tasks, and raise a PR. |
-| `/pm backlog` | Query and manage deferred items via Beads. |
-| `/pm tasks` | Show the current sprint task tree. |
+**2. Connect your agent.** Load the fleet server in Claude Code with
+`/mcp` (or restart your provider CLI). Your agent now has a fleet.
 
-See [skills/pm/SKILL.md](skills/pm/SKILL.md) for the full command reference.
+**3. Register members -- in plain language.** apra-fleet is driven
+conversationally through any MCP-capable agent:
 
-Want to build your own skill on top of Fleet? See [docs/writing-skills.md](docs/writing-skills.md).
+> "Register a local member called `doer`. Register another called
+> `reviewer`. Pair them."
+
+> "Register 192.168.1.10 as `build-server`. Username akhil, work folder
+> `/home/akhil/projects/myapp`."
+
+Remote passwords are collected out-of-band -- typed into a separate
+terminal, never the chat -- used once to set up SSH keys, then forgotten.
+
+**4. Run your first workflow:**
+
+```bash
+apra-fleet workflow hello-world
+```
+
+Then point the fleet at real work:
+
+```bash
+apra-fleet workflow fleet-sprint \
+  --issue my-project-epic --members doer \
+  --branch fleet-sprint/first-run --base main
+```
+
+Open the dashboard, watch your fleet PLAN->BUILD->REVIEW->TEST->SHIP in a loop till closure
+
+> **New to fleet-sprint?** Read the
+> [fleet-sprint Getting Started Guide](https://apra-labs.github.io/apra-fleet/fleet-sprint-getting-started.html)
+> ([Markdown](docs/fleet-sprint-getting-started.md) if you're reading this on
+> GitHub -- [PDF](docs/fleet-sprint-getting-started.pdf)) -- a plain-English walkthrough
+> of what it does, what you need to prepare (beads backlog, `deploy.md`,
+> test playbooks, member registration), how to launch and monitor a sprint,
+> and what's automated versus what's still your call.
+
+**Running fleet-sprint after npm install:** the `apra-fleet workflow
+fleet-sprint ...` command above is the same one command for everyone --
+whether you installed via `npm install -g @apralabs/apra-fleet`, the
+standalone binary, or a git-clone dev checkout. There is no separate
+`fleet-sprint` command to install or remember. See
+[the full flag reference](packages/apra-fleet-se/fleet-sprint/docs/README.md)
+for every option.
+
+## How it works
+
+### Layered Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/marketing/fleet-stack-dark.svg">
+  <img src="assets/marketing/fleet-stack-light.svg" alt="apra-fleet layered architecture stack: dependencies from OS primitives up to autonomous engineering orchestrators" width="100%">
+</picture>
+
+**Component Docs:** [fleet-sprint](packages/apra-fleet-se/fleet-sprint/docs/README.md) | [auto-sprint.js](packages/apra-fleet-se/apra-pm/docs/sprint-workflow.md) | [apra-fleet-client](packages/apra-fleet-client/docs/overview.md) | [apra-pm](packages/apra-fleet-se/apra-pm/README.md) | [apra-fleet-mcp](docs/mcp-tools.md) | [Agent Roles](packages/apra-fleet-se/docs/role-contracts.md)
+
+### Fleet Dispatch Topology
+
+```mermaid
+flowchart LR
+    CP["Control Plane<br/>(Server, Engine, Supervisor)"] -->|Dispatch & Sync| M1["MacBook<br/>(Claude)"] & M2["Linux GPU<br/>(vLLM)"] & M3["Cloud VM<br/>(AGY)"] & M4["Windows<br/>(OpenCode)"]
+```
+
+- **Fleet server**: the control plane. Registers members, dispatches commands and prompts, moves files, brokers credentials. Speaks MCP, so any MCP-capable agent can drive a fleet.
+- **Members**: real machines running provider CLIs. Composes provider-native permissions before every dispatch; unattended modes are scoped, never blanket.
+- **Workflow engine**: runs workflow programs with phases, retries, turn budgets, resumable sessions, and per-activity persistent state.
+- **Supervisor**: always-on layer -- launch & stop sprints over HTTP, member reservation ledger, crash watchdog, run history.
+
+## Explore with agents. Operate with programs.
+
+There are two ways to orchestrate agents, and apra-fleet is built on the
+observation that you need both -- at different stages of a workflow's life:
+
+- **Exploration mode.** While a workflow is still being discovered, let an
+  LLM orchestrate: flexible, adaptive, and token-hungry -- every step is a
+  decision, and every decision costs thinking.
+- **Operation mode.** Once you know what must happen, the control flow
+  becomes a deterministic workflow program. Shell, git, and file steps run
+  through `execute_command` -- zero tokens. The model is invoked only at
+  the corners that genuinely require judgment (`execute_prompt`): review
+  this diff, plan this backlog, decide this exception.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/marketing/cost-collapse-dark.svg">
+  <img src="assets/marketing/cost-collapse-light.svg" alt="Cost per apra-fleet e2e run: four real LLM-driven runs ranging $0.46-$3.05, then ~$0.00 / run forever after switching to a deterministic workflow." width="100%">
+</picture>
+
+That is not a projection -- it is this repository's own e2e setup+teardown
+step, before and after we hardened it. Development tokens are not
+operating tokens: pay once to discover the workflow, then run it free.
+
+| | LLM-orchestrated (explore) | Workflow-orchestrated (operate) |
+|---|---|---|
+| Control flow | the model decides each step (tokens) | deterministic program (free) |
+| Shell / git / file steps | narrated through the model | `execute_command`, zero tokens |
+| Where the model runs | everywhere | judgment nodes only (`execute_prompt`) |
+| Cost curve | scales with every step | scales with thinking only |
+| Failure mode | drift and silent retries | typed errors, resumable state |
+
+The collapse is two-dimensional. As a workflow hardens, control flow moves
+from model to program -- and the judgment nodes that remain move from
+frontier models to cheaper ones, because a well-specified task no longer
+needs discovery-grade reasoning. **Develop a workflow with Claude;
+operationalize it on OpenCode against a local or OpenRouter model.** Same
+fleet, same workflow -- swap the members. Tier routing makes it a
+registration change, not a rewrite.
+
+Only a fleet makes that trade possible. Single-provider tools cannot leave
+their vendor; in-process frameworks cannot move orchestration out of the
+token path. Because apra-fleet's unit of execution is the member -- a
+machine plus a provider, swappable at registration -- the same hardened
+workflow runs on frontier models the day you design it and on commodity
+models every day after.
+
+fleet-sprint is this principle, lived: it began as LLM-orchestrated
+exploration; each discovered pattern was hardened into the deterministic
+engine; today the engine drives hour-long autonomous runs in which models
+are consulted only as planner, doer, reviewer, tester, and harvester.
+
+## Compare to alternatives
+
+| Tool | Overlap | Where apra-fleet differs |
+|------|---------|--------------------------|
+| Single-agent coding assistants | AI writes code | A fleet adds agents that review, test, and deploy each other's work -- across vendors. |
+| CI self-hosted runners | Runs work on other machines | Conversational and stateful, not pipeline-triggered; agents carry context between phases. |
+| SkyPilot / dstack | Multi-machine compute | Coordinates agents and their context, credentials, and permissions -- not just jobs. |
+| Google A2A | Agent-to-agent messaging | An opinionated orchestration and operations layer, not just a transport. |
+| Agent frameworks (LangGraph, CrewAI, ...) | Multi-agent logic | Those compose agents inside one process; apra-fleet operates agents across real machines, providers, and days-long workflows. |
+
+When NOT to use it: a one-off single-file change needs no fleet.
+
+## Security model, in one paragraph
+
+Secrets are entered out-of-band into a credential store and referenced as
+`{{secure.NAME}}` -- resolved server-side at execution, never visible to
+any LLM or log. Credentials scope to members, expire on TTL, and can carry
+a network egress policy (allow / deny / confirm). Every member runs with
+composed, provider-native permission files -- allow-listed tools, not
+god-mode. VCS access is provisioned and revocable per member.
+
+## The packages
+
+| Package | What it is |
+|---|---|
+| `apra-fleet` | The fleet platform: server, CLI, member management, credentials, workflows runtime |
+| `packages/apra-fleet-se` | The software-engineering vertical: fleet-sprint engine, agent contracts, integration suites |
+| `packages/apra-fleet-workflow` | Workflow authoring runtime: state, viewer, checkpointing |
+| `packages/fleet-api-contract` | Typed API contract shared by server and clients |
+
+## Status and roadmap
+
+apra-fleet is under active development -- by its own fleet. Current focus:
+hardening autonomous sprint execution (the toughest workflow we know of),
+supervisor-orchestrated multi-sprint operation, and the workflow SDK for
+third-party verticals.
 
 ## Documentation
 
 | Topic | Link |
 |-------|------|
+| **fleet-sprint Getting Started Guide (start here, plain English)** | [Website](https://apra-labs.github.io/apra-fleet/fleet-sprint-getting-started.html) - [Markdown](docs/fleet-sprint-getting-started.md) - [PDF](docs/fleet-sprint-getting-started.pdf) |
 | Codebase wiki (architecture, internals, AI Q&A) | [DeepWiki](https://deepwiki.com/Apra-Labs/apra-fleet) |
 | Install, uninstall, the `--llm` flag | [docs/install.md](docs/install.md) |
-| Choosing a provider | [docs/provider-guide.md](docs/provider-guide.md) |
+| Choosing a provider (roles, gotchas, mixing providers, OpenCode/local models) | [docs/provider-guide.md](docs/provider-guide.md) |
+| Transport, service mode, and supported interfaces | [docs/transport-and-service-mode.md](docs/transport-and-service-mode.md) |
+| Cost model (tiering, shell-over-prompts, measured token spend) | [docs/cost-model.md](docs/cost-model.md) |
+| The PM skill (doer-reviewer sprints, `/pm` commands) | [docs/pm-skill-overview.md](docs/pm-skill-overview.md) |
 | FAQ | [docs/FAQ.md](docs/FAQ.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Keeping Fleet updated (`apra-fleet update`) | [docs/features/update.md](docs/features/update.md) |
+| Live member activity (`apra-fleet watch`, `logging.previewChars`) | [docs/features/watch.md](docs/features/watch.md) |
 | Secure credentials and passwords | [docs/features/oob-auth.md](docs/features/oob-auth.md) |
+| Member category and tags | [docs/features/member-tags.md](docs/features/member-tags.md) |
 | Enabling SSH on a remote machine (if it does not have it yet) | [docs/ssh-setup.md](docs/ssh-setup.md) |
 | Git authentication | [docs/design-git-auth.md](docs/design-git-auth.md) |
 | Cloud compute | [docs/cloud-compute.md](docs/cloud-compute.md) |
 | Architecture | [docs/architecture.md](docs/architecture.md) |
+| Hub-spoke cloud migration plan (historical; see tier-3 ownership ADR) | [docs/hub-spoke-master-plan.md](docs/hub-spoke-master-plan.md) |
+| Tier-3 ownership decision (fleet-dashboard vs `src/hub-service/`) | [docs/adr-tier3-ownership.md](docs/adr-tier3-ownership.md) |
+| Shared hub/dashboard API contract package | [packages/fleet-api-contract/README.md](packages/fleet-api-contract/README.md) |
+| Workflow engine internals (`agent()`/`parallel()`/`pipeline()`, journal, budget) | [packages/apra-fleet-workflow/docs/apra-fleet-workflow-architecture.md](packages/apra-fleet-workflow/docs/apra-fleet-workflow-architecture.md) |
+| Writing and running workflow scripts | [packages/apra-fleet-workflow/docs/workflow-guide.md](packages/apra-fleet-workflow/docs/workflow-guide.md) |
+| Authoring a SEA-embedded `apra-fleet workflow` (manifest, entry contract, launcher env vars) | [docs/authoring-workflows.md](docs/authoring-workflows.md) |
+| Workflow launcher fleet-server resolution order (HTTP singleton vs. stdio) | [docs/adr-workflow-server-resolution.md](docs/adr-workflow-server-resolution.md) |
+| Running fleet-sprint (full flag reference; identical for npm-install, standalone binary, and git-clone dev checkout) | [packages/apra-fleet-se/fleet-sprint/docs/README.md](packages/apra-fleet-se/fleet-sprint/docs/README.md) |
+| Auto-sprint overview (autonomous plan-develop-review-publish loop) | [packages/apra-fleet-se/docs/overview.md](packages/apra-fleet-se/docs/overview.md) |
+| Auto-sprint CLI reference | [packages/apra-fleet-se/docs/cli-reference.md](packages/apra-fleet-se/docs/cli-reference.md) |
+| Auto-sprint internals (cycle loop, stall detection, budget, topology) | [packages/apra-fleet-se/docs/architecture.md](packages/apra-fleet-se/docs/architecture.md) |
+| Auto-sprint agent role contracts | [packages/apra-fleet-se/docs/role-contracts.md](packages/apra-fleet-se/docs/role-contracts.md) |
+| MCP client SDK overview (transports, `ApraFleet` API) | [packages/apra-fleet-client/docs/overview.md](packages/apra-fleet-client/docs/overview.md) |
+| MCP client SDK API reference | [packages/apra-fleet-client/docs/api-reference.md](packages/apra-fleet-client/docs/api-reference.md) |
+| MCP client SDK getting started | [packages/apra-fleet-client/docs/getting-started.md](packages/apra-fleet-client/docs/getting-started.md) |
 
 ## Community
 
@@ -310,6 +334,16 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
 ## License
 
 Apache 2.0 -- see [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+
+**Stop babysitting agents. Start operating fleets.**
+
+[Quick Start](#quick-start-5-minutes) - [GitHub Issues](https://github.com/Apra-Labs/apra-fleet/issues) - [Apra Labs](https://apralabs.com)
+
+</div>
   </doc>
 
   <doc title="Vocabulary" desc="Shared terminology -- member, task, skill, PM, fleet, doer/reviewer pattern.">
@@ -375,28 +409,28 @@ Members with different **providers** are interchangeable from the PM's perspecti
   </doc>
 
   <doc title="Architecture" desc="How the fleet hub, MCP server, and members interact at a system level.">
-<!-- llm-context: This document explains the internal architecture of apra-fleet — the MCP server, member registry, SSH transport, session management, and how tools are dispatched. Read this when a user asks how fleet works under the hood, or when debugging connectivity or session issues. -->
+<!-- llm-context: This document explains the internal architecture of apra-fleet  -- the MCP server, member registry, SSH transport, session management, and how tools are dispatched. Read this when a user asks how fleet works under the hood, or when debugging connectivity or session issues. -->
 <!-- keywords: MCP server, member registry, SSH, transport, session, tool dispatch, child process, local member, remote member, architecture -->
-<!-- see-also: ../README.md (getting started), tools-infrastructure.md (tool details), vocabulary.md (terminology) -->
+<!-- see-also: ../README.md (getting started), mcp-tools.md (tool details), vocabulary.md (terminology) -->
 
 # Architecture
 
 ## Why This Exists
 
-AI coding agents are powerful on a single machine. But real work spans many machines — a dev server, a staging box, a GPU trainer, a production host. Today, if you want Claude Code working across all of them, you SSH in manually, run prompts one at a time, and copy files by hand. There's no single pane of glass.
+AI coding agents are powerful on a single machine. But real work spans many machines  -- a dev server, a staging box, a GPU trainer, a production host. Today, if you want Claude Code working across all of them, you SSH in manually, run prompts one at a time, and copy files by hand. There's no single pane of glass.
 
-Apra Fleet gives one Claude instance the ability to orchestrate many. Register machines, push files, run prompts, monitor health — all through natural language from your terminal. One master, many members.
+Apra Fleet gives one Claude instance the ability to orchestrate many. Register machines, push files, run prompts, monitor health  -- all through natural language from your terminal. One master, many members.
 
 ## Conceptual Model
 
 The system has three layers of abstraction:
 
-**Fleet** → **Members** → **Sessions**
+**Fleet** -> **Members** -> **Sessions**
 
-A *fleet* is the collection of all registered machines. A *member* is one machine with a working directory — the unit you talk to. A *session* is a conversation thread on a member — Claude remembers context across prompts within a session, and you can reset it to start fresh.
+A *fleet* is the collection of all registered machines. A *member* is one machine with a working directory  -- the unit you talk to. A *session* is a conversation thread on a member  -- Claude remembers context across prompts within a session, and you can reset it to start fresh.
 
 Members come in two flavors:
-- **Remote members** communicate over SSH. They can be any machine you can reach — Linux VMs, macOS servers, Windows boxes.
+- **Remote members** communicate over SSH. They can be any machine you can reach  -- Linux VMs, macOS servers, Windows boxes.
 - **Local members** run on the same machine as the master, in a different folder. No SSH needed. Useful for isolating work into separate project directories without spinning up another machine.
 
 This distinction is hidden behind a **Strategy pattern**: every tool interacts with members through a uniform interface. The strategy implementation (remote via SSH, or local via child process) is selected at runtime based on member type. Tools never know or care which kind of member they're talking to.
@@ -404,32 +438,32 @@ This distinction is hidden behind a **Strategy pattern**: every tool interacts w
 ## How It Fits Together
 
 ```
-┌────────────────────────────────────────────────────┐
-│  Master Machine                                    │
-│                                                    │
-│  Claude Code CLI ◄──stdio──► Apra Fleet Server      │
-│                               │                    │
-│                    ┌──────────┴──────────┐         │
-│                    │  Member Strategy    │         │
-│                    │  (uniform interface)│         │
-│                    └──┬─────────────┬───┘         │
-│                       │             │              │
-│              Remote Strategy   Local Strategy      │
-│              (ssh2 + sftp)    (child_process + fs) │
-│                       │             │              │
-│                    SSH│        local exec           │
-└───────────────────────┼─────────────┼──────────────┘
-                        │             │
-           ┌────────────┘             └──► /other/project/
-           ▼                               (same machine)
-    ┌──────────────┐
-    │ Remote Member │
-    │ (any OS,      │
-    │  any provider)│
-    └──────────────┘
++----------------------------------------------------+
+|  Master Machine                                    |
+|                                                    |
+|  Claude Code CLI <--stdio--> Apra Fleet Server     |
+|                               |                    |
+|                    +----------+----------+         |
+|                    |  Member Strategy    |         |
+|                    |  (uniform interface)|         |
+|                    +--+-----------+-----+         |
+|                       |           |                |
+|              Remote Strategy   Local Strategy      |
+|              (ssh2 + sftp)    (child_process + fs) |
+|                       |           |                |
+|                    SSH |      local exec            |
++----------------------------------------------------+
+                        |           |
+           +------------+           +--> /other/project/
+           v                             (same machine)
+    +--------------+
+    | Remote Member |
+    | (any OS,      |
+    |  any provider)|
+    +--------------+
 ```
 
-The MCP server speaks **stdio** — the standard transport for Claude Code MCP servers. Claude sends JSON-RPC tool calls, the server executes them, returns results. No HTTP, no ports to open.
+The MCP server speaks **stdio**  -- the standard transport for Claude Code MCP servers. Claude sends JSON-RPC tool calls, the server executes them, returns results. No HTTP, no ports to open.
 
 ## Layers
 
@@ -447,20 +481,39 @@ The codebase follows a strict layering:
 
 Each layer only depends on the layers below it. Tools never import other tools. Services don't know about the MCP protocol.
 
+## HTTP Transport & Interactive Sessions
+
+Alongside the stdio MCP transport, the server exposes a `StreamableHTTPServerTransport` on `POST/GET/DELETE /mcp` (`src/services/http-transport.ts`), bound to `127.0.0.1` only. This is what lets a member's own `apra-fleet` MCP server connect back interactively -- distinct from the subprocess/SSH-driven `execute_prompt` path, which stays subprocess-only. See `docs/hub-spoke-wire-protocol.md` for the full wire-level design.
+
+Each `/mcp` connection carries one of two identities:
+
+- **JWT-authenticated** -- a `Bearer` token (`src/services/jwt.ts`, HS256, signed with `~/.apra-fleet/fleet.key`) verified via the pluggable `TokenIssuer` (`src/services/token-issuer.ts`). The token's `workspace_id` claim is the hard security boundary (never `project_id`, which is an optional non-security label) -- Phase 1 uses a local dev-mode issuer (one machine == one implicit workspace); a hub-era issuer swaps in behind the same interface with no token-shape change.
+- **Unauthenticated URL-param fallback** -- a `?member=<id>` query param, trusted only because the server binds to loopback. Legacy friendly-name params are resolved to the member's UUID via the agent registry.
+
+A connected member is tracked in the in-memory `sessionRegistry` (`src/services/session-registry.ts`), keyed on the composite `(workspace_id, member_id)` -- every lookup is workspace-scoped, so a member connected under a different workspace is indistinguishable from "not connected" (existence is never leaked across the boundary). `send_message` (`src/tools/send-message.ts`) uses this registry to push a `notifications/claude/channel` MCP notification to a connected member's live session, flipping its status to `busy`.
+
+That flip is closed by `report_status` (`src/tools/report-status.ts`): a connected member's OWN session calls it (`online` or `idle`) to report it's done responding. There is no `member_id` parameter -- identity comes entirely from the live MCP session the call arrives on, resolved via `sessionRegistry.findBySessionId(extra.sessionId)` (the SDK populates `sessionId` on every tool call's `extra`). This is the tier-2-local status state machine `docs/hub-spoke-wire-protocol.md` section 4 reserves the `presence.member_status` envelope name for, once a hub relays it upward.
+
+Fleet events (`credential:stored`, `task:completed`, `member:status-changed`, `stall:detected`) broadcast only to sessions in the same workspace as the local orchestrator -- never across a workspace wall.
+
+`execute_prompt` (`src/tools/execute-prompt.ts`) itself is dual-path: for a member with NO live interactive session, it behaves exactly as before (subprocess/SSH, unchanged). For a member that IS interactively connected, it routes through the same channel instead of spawning anything -- `send_message` pushes the prompt and the caller awaits the member's `respond_to_message({reply_to, content})` call, correlated purely in-memory by `src/services/pending-responses.ts` (a `msgid` -> pending-promise map, timeout-bound by the same `timeout_s` the subprocess path uses). Mode selection is decided tier-2-locally against this machine's own `sessionRegistry` -- never from caller-side or (future) hub-side state -- so it is unaffected by whether `execute_prompt` is invoked directly or eventually relayed through a hub. This interactive mode is gated to Claude members only: `docs/interactive-injection-provider-survey.md` confirms it is POC-proven on Claude alone (the other five providers are confirmed unsupported or unconfirmed) -- a non-Claude member with a live session (e.g. from `registerMcpEndpoint`, which gives several providers basic MCP tool access) still falls through to the subprocess path.
+
 ## Provider Abstraction
 
-Fleet supports five LLM providers: Claude Code, Google Antigravity CLI (agy), OpenAI Codex CLI, GitHub Copilot CLI, and Gemini CLI. Members can mix providers within a single fleet.
+Fleet supports six LLM providers -- Claude Code, Google Antigravity CLI (agy), OpenAI Codex CLI, GitHub Copilot CLI, Gemini CLI, and OpenCode -- plus a seventh null option, `'none'`, for a plain command executor with no LLM at all (`src/providers/none.ts`). Members can mix providers within a single fleet.
 
 ### How It Works
 
-Each member has an optional `llmProvider` field (`'claude' | 'agy' | 'codex' | 'copilot' | 'gemini'`). When absent, it defaults to `'claude'` for backwards compatibility. Every tool that interacts with the member's LLM CLI resolves the provider via `getProvider(agent.llmProvider)` and delegates CLI-specific concerns to the `ProviderAdapter` interface.
+Each member has an optional `llmProvider` field (`'claude' | 'agy' | 'codex' | 'copilot' | 'gemini' | 'opencode' | 'none'`). When absent, it defaults to `'claude'` for backwards compatibility. Every tool that interacts with the member's LLM CLI resolves the provider via `getProvider(agent.llmProvider)` and delegates CLI-specific concerns to the `ProviderAdapter` interface.
+
+A `'none'` member supports `execute_command` (already fully provider-agnostic, no changes needed) but never `execute_prompt` in either mode -- rejected immediately with a clear error rather than reaching `NoneProvider`'s methods, most of which throw by design (there is no CLI, no prompt, no model to build a command from). `register_member` skips CLI/auth verification entirely for these members, and status/detail views show `compute only` in place of a token count.
 
 ```
-┌──────────┐     getProvider()     ┌─────────────────┐
-│  Tool    │ ───────────────────►  │ ProviderAdapter  │
-│ (generic)│                       │  (per-provider)  │
-└──────────┘                       └────────┬─────────┘
-                                            │ supplies:
++----------+     getProvider()     +-----------------+
+|  Tool    | --------------------> | ProviderAdapter  |
+| (generic)|                       |  (per-provider)  |
++----------+                       +--------+---------+
+                                            | supplies:
                                      cliCommand()
                                      buildPromptCommand()
                                      parseResponse()
@@ -482,58 +535,210 @@ src/providers/
   codex.ts       - CodexProvider (NDJSON parser)
   copilot.ts     - CopilotProvider
   gemini.ts      - GeminiProvider
+  opencode.ts    - OpenCodeProvider (NDJSON parser, local/self-hosted models)
   index.ts       - getProvider() singleton factory
 ```
 
 ### Mix-and-Match Fleet
 
-A fleet can have members on different providers simultaneously. The PM dispatches work to members by name — it doesn't need to know which LLM backend each member uses. The fleet server resolves the correct CLI commands per member at runtime.
+A fleet can have members on different providers simultaneously. The PM dispatches work to members by name  -- it doesn't need to know which LLM backend each member uses. The fleet server resolves the correct CLI commands per member at runtime.
 
 ```
 PM (orchestrator, Claude)
   |
-  +-- dev1   (claude,  remote)
-  +-- dev2   (gemini,  remote)
-  +-- dev3   (codex,   local)
-  +-- review (copilot, remote)
+  +-- dev1   (claude,   remote)
+  +-- dev2   (gemini,   remote)
+  +-- dev3   (codex,    local)
+  +-- dev4   (opencode, local)   <- self-hosted model via Ollama
+  +-- review (copilot,  remote)
 ```
 
-All four members use the same `execute_prompt` tool call. The tool builds provider-correct CLI commands for each.
+All five members use the same `execute_prompt` tool call. The tool builds provider-correct CLI commands for each.
 
 ### Key Differences Across Providers
 
 - **`max_turns`** - Claude-only. Ignored for Antigravity, Codex, Copilot, and Gemini.
 - **OAuth credential copy** - Claude-only. Non-Claude providers require an API key (`provision_llm_auth` with `api_key`).
 - **JSON output format** - Codex emits NDJSON (one event per line). All others emit a single JSON object. Handled transparently by `provider.parseResponse()`.
-- **Session resume** - Claude, Antigravity, and Gemini support resuming specific session IDs. Codex and Copilot resume the most recent local session.
+- **Session resume** - Claude, Antigravity, and Gemini support resuming specific session IDs. Codex and Copilot resume the most recent local session. OpenCode supports session resume via `--session <id>` or `--continue`.
+- **OpenCode** - uses any OpenAI-compatible endpoint (Ollama, vLLM). The user provisions the endpoint; Fleet installs the CLI and agents. Model tiers are set per member at registration via `model_tiers` (since models vary by deployment). Agent files are transformed from Claude format to OpenCode format at install time (tools allowlist -> permission map).
+- **Antigravity (agy) response capture** - `AgyProvider.parseResponse()` extracts both the reply text and, when the CLI's transcript exposes one, a `conversation_id` that is surfaced as the response's `sessionId` -- mirroring Claude/Gemini session-id capture instead of returning an empty session id for a provider that does expose one.
+
+### Terminal-Signal and Dead-Session Detection Invariants
+
+These invariants apply across all providers that can terminate a dispatch without a clean `execute_prompt` return, and are enforced independently of each other as defense-in-depth -- a failure in one layer must not silently convert into a wasted multi-thousand-second wait for the hard dispatch ceiling:
+
+- **Max-turns detection is channel-agnostic.** A CLI can signal "hit the turn limit" through more than one channel in the same transcript stream -- a `type:result` event's `terminal_reason` field, that same event's `subtype` (`error_max_turns`), a distinct standalone `max_turns_reached` transcript event (which can arrive before, or instead of, any result event, e.g. when a hard-timeout kill truncates the stream first), or a plain-text fallback when no result event terminates the stream at all. `src/providers/claude.ts` normalizes every one of these channels to the same `terminalReason: 'max_turns'` on the parsed response, and `src/providers/provider.ts` exposes a single shared classifier (checking the normalized `terminalReason` OR the raw `error_max_turns` subtype) that every call site uses -- there is exactly one place that decides "was this a max-turns termination," never a per-call-site heuristic. This does not add any new MCP reason-enum value; `max_turns_exhausted` already existed and is now reliably reached from every transcript shape that means it.
+- **Stall detection is a superset backstop, not a replacement.** The transcript-mtime cross-check described in `docs/stall-detector-resilience.md` (section 7) exists specifically so that a terminal-signal-detection gap (like the max-turns case above, or any future one) cannot regress into the old failure mode of a dead session sitting unkilled until the hard ceiling -- a frozen transcript is killed within the configured inactivity window regardless of whether content parsing understood why it went quiet.
+- **A busy-lock rejection is verified against process liveness before being honored.** `execute_prompt`'s in-flight lock (`inFlightAgents`, `src/tools/execute-prompt.ts`) can outlive the process it was guarding (a child reaped without its exit handler firing, or an interactive session's underlying CLI process dying after registration). Before returning a `busy` rejection, the dispatch path probes the locked session's pid for liveness -- locally via a direct signal-0 check, remotely via a fresh independent liveness round trip (never the possibly-wedged channel that produced the stale lock), and via the session registry's last-known pid for interactive sessions -- and self-heals (releases the lock, warns, and proceeds with the new dispatch) only on a **definitive** dead-pid reading. Ambiguity (no pid captured at all, e.g. a dispatch that hasn't reached its pid-capture step yet) is always treated as still-busy, never as staleness evidence, so a self-heal attempt can never race a dispatch that is still starting up. This keeps `fleet_status`'s independently-computed busy/idle view and the dispatch gate's busy/idle view from ever disagreeing for longer than one dead-lock detection cycle.
+- **A confirmed stall cancels the in-flight dispatch, not just the remote process.** Killing the remote pid a stalled dispatch was running is necessary but not sufficient -- the MCP `tools/call` that dispatched it can still be sitting on a pending `execCommand()` promise with no way to reject it, so the client falls back to waiting out its own hard deadline even though the server-side work died minutes earlier. The stall path now threads an `AbortController` through `onStall` that is wired into the same strategy-level `execCommand()` abort signal remote strategies already accept, so a confirmed stall settles the pending call immediately with a typed `stalled` dispatch error instead of silently degrading into a multi-thousand-second client-side timeout wait.
+- **The client's dispatch deadline must cover every server-side retry the request can trigger, not just the first attempt.** When the server's own inactivity-timeout handling retries a dispatch once with a fresh session (same `timeout_s`/`max_total_s`), the total server-side worst case is a multiple of the value the client's deadline was derived from. A client deadline sized for only the first attempt can fire before the server's own retry-and-report-cleanly path gets a chance to run, which surfaces a raw transport timeout to the caller instead of a clean typed error. The fix is a single shared retry-budget helper that both sides size their deadlines from, so "the client waits at least as long as the server's own worst-case retry sequence" is a property of one function, not something every dispatch call site has to remember to compute correctly.
 
 See `docs/provider-matrix.md` for the full comparison table.
+
+### Multi-member topology (fleet-sprint)
+
+The `apra-fleet-se` fleet-sprint runner (`packages/apra-fleet-se/fleet-sprint/runner.js`) dispatches roles across configured members: the orchestrator issues every `bd` command and the git push/PR, doers round-robin across the doer pool, and the reviewer runs from the reviewer pool.
+
+Two topology modes are supported, selected explicitly when a sprint starts:
+
+- **`legacy` mode** -- no cross-member sync layer. Every `bd` command the orchestrator issues runs against the orchestrator member's beads DB, while each doer's own `bd close` runs against **its** member's DB; the sprint git branch is only meaningful if all members operate on the same working state. This coheres in exactly two topologies: **single-member** (one member does everything) or a **verified shared-workspace fleet** (every configured member resolves to the same checkout/beads DB). Independent per-member checkouts are **not supported** in this mode -- non-orchestrator members would silently work against a beads DB and git branch the orchestrator never sees.
+- **`synced` mode** -- an orchestrator-bracketed git+Dolt sync layer wraps every dispatch that reads or writes git-tracked or beads state, reconciling each member's state explicitly instead of assuming it is already shared. This is what makes genuinely independent per-member checkouts safe. The sync layer includes a scripted-first escalation ladder for both git and Dolt conflicts (mechanical detection and resolution first, an agent dispatched with an explicit conflict runbook only as a documented last resort), plus supervisor-owned global coordination (a Dolt push mutex and a child-id allocator) so concurrent cross-member Dolt writes never silently corrupt each other's beads clone.
+
+Guards enforcing whichever mode is selected:
+
+1. **Branch-ensure everywhere** (both modes): before the first doer round, the runner git-ensures the sprint branch (`fetch` + `checkout -B`) on **every** member in the union of the orchestrator/doer/reviewer pools -- not just the orchestrator -- and non-destructively re-checks-out the branch on each member at the start of later cycles (it never resets to base once work is committed).
+2. **Topology precondition**: `bin/cli.mjs` calls `checkMemberTopology()` before starting a multi-member sprint. In `legacy` mode it compares an identity signal (`git rev-parse HEAD`) across the configured members and **refuses to start with a clear error** if they disagree (or if a member's signal can't be obtained); in `synced` mode HEADs are allowed to differ, but every member must share the same git remote origin and pass a live beads-Dolt-pull probe. Single-member sprints trivially pass either check.
+
+See `packages/apra-fleet-se/docs/architecture.md` for the full internals of both modes, including the escalation ladders and the always-on supervisor service that launches and tracks sprints.
+
+## Workflow Subsystem (SEA-embedded workflow runner)
+
+`apra-fleet workflow <name>` runs a self-contained script (an ESM entry point
+under `workflows/<name>/`) against a live fleet connection, from inside the
+single-executable-application (SEA) binary -- no separate Node install and no
+unpacking to a temp directory required. `fleet-sprint` is itself shipped as one
+of these built-in workflows rather than as a bespoke subcommand, so the
+launcher, the packaging, and the docs only need to solve this problem once.
+
+**Two always-separate processes.** The workflow launcher (`apra-fleet
+workflow`, `fleet-sprint`) and the `apra-fleet` MCP server are never merged
+into one process. This is a hard boundary, not an optimization detail --
+see `docs/adr-workflow-server-resolution.md` for the ADR and its explicit
+scope guard against reopening it.
+
+**Server connection resolution is a single shared helper**, not duplicated
+per consumer. `@apralabs/apra-fleet-client/server-resolution`
+(`packages/apra-fleet-client/src/client/server-resolution.mjs`) implements
+one resolution order used identically by `src/cli/workflow.ts` and
+`packages/apra-fleet-se/bin/cli.mjs`:
+
+1. `APRA_FLEET_TRANSPORT` forced override (`http` fails loud with no
+   singleton rather than silently falling back to a private server; `stdio`
+   or a set `APRA_FLEET_SERVER_CMD`/`_BIN` goes straight to self-spawn).
+2. Probe for a healthy HTTP singleton (`checkRunningInstance()` -- the same
+   pid + `/health` check the installed service already uses for
+   startup-dedup) and attach with zero spawned processes. This is the
+   default, steady-state path.
+3. Fall back to stdio self-spawn (the four-tier command resolution
+   `resolveFleetServerCommand()` already had) only when no healthy
+   singleton is found.
+
+The rationale for one shared helper over two copies: a launcher that merely
+mirrored the old stdio-only `resolveFleetServerCommand()` would always
+self-spawn a private server even when a healthy HTTP singleton already
+existed, doubling running servers and splitting state. Duplicating the
+resolution order in two languages (TS launcher, MJS fleet-sprint) was
+rejected because it guarantees drift between the two copies over time; see
+the ADR for the full tradeoff writeup.
+
+**Workflow entry contract:** a workflow is a directory under `workflows/`
+containing a `workflow.json` (name, entry, description) and an entry file
+that is either self-executing ESM or exports `main(args)` / `run(args)` /
+a default export. The launcher sets two env vars for every workflow run --
+`APRA_FLEET_SERVER_BIN` and `APRA_FLEET_SE_SCHEMAS_DIR` -- and never
+clobbers a value the caller already set. See `docs/authoring-workflows.md`
+for the full contract, including the raw-node escape hatch and how a
+workflow should import the shared engine/client packages.
+
+**Entry-path escape prevention is security-critical, not incidental:** the
+launcher resolves a workflow's `entry` against its own directory and
+rejects any resolution that escapes it (checked via `path.relative` plus
+`..`/absolute-path detection) before ever executing the file. A workflow
+manifest is not a trusted-by-construction input.
+
+**Packaging:** the workflow runtime, agent schemas, and built-in workflows
+(including fleet-sprint) are embedded as SEA assets by
+`scripts/gen-sea-config.mjs`, proven viable by an earlier spike that
+dynamic `import()` of on-disk ESM works from inside a SEA main script on
+all three target OSes.
+
+**Install/uninstall/update lifecycle (Phases 1-3, closed this sprint,
+`apra-fleet-7pm`):** `install.ts`'s workflow-install step and its extraction
+logic (extract-to-temp-then-rename, with Windows EBUSY retry/backoff) were
+factored out into `src/cli/workflow-assets.ts` so more than one caller can
+share the exact same code path instead of re-implementing it:
+
+- `apra-fleet install` (fresh install) calls `extractWorkflowSubsystemAssets()`
+  to lay down `~/.apra-fleet/{node_modules,schemas,workflows/<builtin>}`.
+- `src/cli/workflow.ts`'s launcher self-heals: if a `workflow <name>`
+  invocation finds the on-disk payload missing or incomplete
+  (`hasWorkflowSubsystemAssets()` is false), it re-extracts from the same
+  embedded SEA assets before running, rather than failing with an opaque
+  module-not-found error.
+- `apra-fleet uninstall --skill workflows` removes the shared runtime/schema
+  dirs plus only the built-in workflow subdirectories recorded in
+  `workflows/.installed.json`'s `builtin` array (falling back to the static
+  `BUILTIN_WORKFLOW_NAMES` list if that manifest is missing, so a
+  partially-installed tree still cleans up). User-authored workflow
+  directories are left in place; `workflows/` itself is only removed if
+  nothing user-authored remains, and the command prints which user
+  workflows it kept.
+- `apra-fleet update` reads back the previously-persisted `--workflows` mode
+  and threads it into the re-invoked install, so an update refreshes
+  built-in workflow assets to the new version while preserving any
+  user-authored workflows already on disk.
+
+**CI coverage (Phase 4, closed this sprint):** `build:binary` smoke tests
+exercise the packaged SEA binary's `workflow` subcommand and the
+fleet-sprint-as-built-in-workflow path end-to-end (not just the source
+`.ts`/`.mjs` files), and a regression-guard test suite
+(`tests/regression-command-surface.test.ts`) pins the full existing CLI
+command surface (`install --help`, `uninstall --dry-run`, `--version`,
+stdio handshake) against golden fixtures so future workflow-subsystem work
+can't silently change unrelated command output.
+
+The workflow subsystem is now installable, self-healing, uninstallable, and
+update-safe end-to-end; remaining gaps for this feature are tracked as
+individual open issues under `apra-fleet-7pm`, not as a phase-level
+placeholder.
+
+**Dev-mode manifest bundling is a transitive-dependency, not a top-level-only,
+contract.** The dev-mode install path bundles `@apralabs/apra-fleet-client`'s
+own package tree so the workflow runtime can load it without a real npm
+install. Because that client package can itself gain a runtime dependency
+(e.g. for a new transport), the manifest builder must walk and bundle the
+client's own `dependencies`, not just the client package's own files -- a
+manifest that copies only the client's top-level directory silently ships a
+client that throws a module-not-found error the moment it needs a dependency
+it never had bundled alongside it. Any future dependency added to
+`apra-fleet-client` must be re-verified against this bundling path, not just
+against the production/packaged-binary install path, since the two paths
+build the manifest differently.
+
+## PM Skill
+
+The PM skill and its role agent definitions (planner, plan-reviewer, doer, reviewer, deployer, integ-test-runner, ci-watcher, harvester), plus their shared `agents/schemas/` and `agents/_shared/` assets, live in this monorepo at `packages/apra-fleet-se/apra-pm/`. At build time, `scripts/dist-pm.mjs` copies the skill and agent files into `dist/` (and `scripts/gen-sea-config.mjs` embeds them as SEA assets for the standalone binary), so all three install paths -- dev-mode, npm, and SEA binary -- carry the same set. At install time, agents are written to the provider's agents directory (e.g. `~/.claude/agents/`); `uninstall` removes that directory in the same pass. For OpenCode members, agent frontmatter is transformed from Claude format to OpenCode format during installation. Claude installs additionally get the `auto-sprint-args` skill (the args contract for the `/auto-sprint` workflow), written to `~/.claude/skills/auto-sprint-args`.
+
+Remote fleet members do not share the operator's home directory, so `register_member`, `update_member`, and (starting with the first dispatch after an orchestrator upgrade) `execute_prompt` each independently hash-diff the canonical agent set against the remote box and push anything missing or stale. See [docs/mcp-tools.md](mcp-tools.md) for per-tool behavior details.
 
 ## Key Design Decisions
 
 ### Strategy Pattern for Member Types
 
-Rather than scattering `if (agent.agentType === 'local')` checks across every tool, the local/remote distinction lives in a single place: the strategy factory. Tools call `getStrategy(agent).execCommand(...)` and get back the same result shape regardless of how it was executed. Adding a third member type (e.g., Docker containers, cloud VMs with API-based access) means writing one new strategy class — no tool changes.
+Rather than scattering `if (agent.agentType === 'local')` checks across every tool, the local/remote distinction lives in a single place: the strategy factory. Tools call `getStrategy(agent).execCommand(...)` and get back the same result shape regardless of how it was executed. Adding a third member type (e.g., Docker containers, cloud VMs with API-based access) means writing one new strategy class  -- no tool changes.
 
 ### Passwords Encrypted at Rest
 
-SSH passwords are encrypted with AES-256-GCM before being written to the registry file. The encryption key is derived from the machine's identity (hostname + OS username), so the registry file is meaningless if copied to another machine. This isn't meant to stop a determined attacker with root access — it prevents accidental plaintext exposure in backups, screenshots, or config file shares.
+SSH passwords are encrypted with AES-256-GCM before being written to the registry file. The encryption key is derived from the machine's identity (hostname + OS username), so the registry file is meaningless if copied to another machine. This isn't meant to stop a determined attacker with root access  -- it prevents accidental plaintext exposure in backups, screenshots, or config file shares.
 
 ### Connection Pooling with Idle Timeout
 
 SSH connections are expensive to establish (TCP + key exchange + auth). The server pools them in memory and reuses connections across tool calls, with a 5-minute idle timeout that auto-closes unused connections. Timers are `unref()`'d so they don't prevent Node from exiting.
 
+The idle timer is reset by normal pool activity (`execCommand`/`getConnection`), but a stall-detector entry that is still `provisional` (created before it has a log file to poll) does not generate that activity itself -- it only benefits from the stall poller's own incidental probes. The pool's cleanup path therefore never tears down an entry purely on the idle timer firing: it re-checks for an active channel immediately before ending the connection, and only actually closes it when genuinely idle. This closes off a class of latent bug where a long-running dispatch with a provisional-shaped stall entry could otherwise have a live channel reaped out from under it. Separately, pooled SSH connections have keepalive configured (interval + a bounded probe count) so a silently dropped network connection is detected and torn down rather than sitting as a phantom pool entry indefinitely.
+
 ### Base64 Prompt Encoding
 
-Prompts sent to remote members are base64-encoded before being passed through SSH. This sidesteps the shell escaping nightmare of nested quoting across SSH → bash → claude CLI, across different operating systems. The remote member decodes before passing to Claude.
+Prompts sent to remote members are base64-encoded before being passed through SSH. This sidesteps the shell escaping nightmare of nested quoting across SSH -> bash -> claude CLI, across different operating systems. The remote member decodes before passing to Claude.
 
 ### Session Persistence
 
-Each member stores an optional `sessionId` — a Claude conversation thread ID. When `resume=true` (the default), subsequent prompts continue the same conversation, so the remote Claude has full context of prior exchanges. Resetting a session is an explicit action, not an accident.
+Each member stores an optional `sessionId`  -- a Claude conversation thread ID. When `resume=true` (the default), subsequent prompts continue the same conversation, so the remote Claude has full context of prior exchanges. Resetting a session is an explicit action, not an accident.
 
 ### File-Based Registry
 
-All fleet state lives in `~/.apra-fleet/data/registry.json` — a single JSON file in the user's home directory. It's deliberately not in the project directory (won't be git-committed accidentally) and not in a database (no server to run, no migrations). For a fleet of dozens of members, JSON is more than sufficient.
+All fleet state lives in `~/.apra-fleet/data/registry.json`  -- a single JSON file in the user's home directory. It's deliberately not in the project directory (won't be git-committed accidentally) and not in a database (no server to run, no migrations). For a fleet of dozens of members, JSON is more than sufficient.
 
 ### Duplicate Folder Prevention
 
@@ -541,23 +746,23 @@ Two members cannot share the same working directory on the same device. For remo
 
 ## Tools
 
-The tools break into natural groups. Each group has detailed documentation:
+The tools break into natural groups in **[mcp-tools.md](mcp-tools.md)**:
 
-**[Lifecycle](tools-lifecycle.md)** — `register_member`, `list_members`, `update_member`, `remove_member`, `shutdown_server`
+**[Lifecycle](mcp-tools.md#1-lifecycle-tools)**  -- `register_member`, `list_members`, `update_member`, `remove_member`, `shutdown_server`
 Manage the fleet roster and server lifecycle. Registration validates connectivity, detects the OS, and checks that Claude CLI is available. Removal includes best-effort cleanup of auth credentials on the member.
 
-**[Work](tools-work.md)** — `send_files`, `execute_prompt`, `execute_command`, `reset_session`
+**[Work](mcp-tools.md#2-work-tools)**  -- `send_files`, `execute_prompt`, `execute_command`, `reset_session`
 The core workflow. Push files to a member, run prompts against it, run shell commands directly, manage conversation sessions.
 
-**[Infrastructure](tools-infrastructure.md)** — `provision_llm_auth`, `setup_ssh_key`, `update_llm_cli`
+**[Infrastructure](mcp-tools.md#3-infrastructure-tools)**  -- `provision_llm_auth`, `setup_ssh_key`, `update_llm_cli`
 One-time setup and maintenance. Provision auth (copy OAuth credentials or deploy API key for any provider), migrate from password to key auth, update the LLM CLI on members.
 
-**[Observability](tools-observability.md)** — `fleet_status`, `member_detail`
+**[Observability](mcp-tools.md#4-observability-tools)**  -- `fleet_status`, `member_detail`
 Two-layer monitoring. `fleet_status` gives a quick summary table across all members with fleet-aware busy detection (distinguishes between Claude processes serving this member vs unrelated Claude activity). `member_detail` drills into one member with connectivity, CLI version, session state, and system resource metrics.
 
 ## Cross-Platform Support
 
-Members can run Windows, macOS, or Linux. The `platform.ts` utility generates the right shell commands for each OS — different commands for checking processes, reading memory, setting environment variables. The OS is auto-detected during registration (`uname -s` on Unix, `cmd /c ver` on Windows) and stored in the member record so subsequent tool calls don't need to re-detect.
+Members can run Windows, macOS, or Linux. The `platform.ts` utility generates the right shell commands for each OS  -- different commands for checking processes, reading memory, setting environment variables. The OS is auto-detected during registration (`uname -s` on Unix, `cmd /c ver` on Windows) and stored in the member record so subsequent tool calls don't need to re-detect.
   </doc>
 
   <doc title="Install" desc="Installation, uninstallation, and the --llm/--skill flags.">
@@ -575,21 +780,22 @@ which skills are installed, uninstalling, and self-updating.
 
 ## Quick install
 
-Copy-paste the one-liner for your platform.
+Installation is the default action -- just run the binary with no arguments (or double-click it
+on Windows).
 
 **macOS (Apple Silicon)**
 ```bash
-curl -fsSL https://github.com/Apra-Labs/apra-fleet/releases/latest/download/apra-fleet-installer-darwin-arm64 -o apra-fleet-installer && chmod +x apra-fleet-installer && ./apra-fleet-installer install
+curl -fsSL https://github.com/Apra-Labs/apra-fleet/releases/latest/download/apra-fleet-installer-darwin-arm64 -o apra-fleet-installer && chmod +x apra-fleet-installer && ./apra-fleet-installer
 ```
 
 **Linux (x64)**
 ```bash
-curl -fsSL https://github.com/Apra-Labs/apra-fleet/releases/latest/download/apra-fleet-installer-linux-x64 -o apra-fleet-installer && chmod +x apra-fleet-installer && ./apra-fleet-installer install
+curl -fsSL https://github.com/Apra-Labs/apra-fleet/releases/latest/download/apra-fleet-installer-linux-x64 -o apra-fleet-installer && chmod +x apra-fleet-installer && ./apra-fleet-installer
 ```
 
-**Windows (x64)** -- run in PowerShell:
+**Windows (x64)** -- download `apra-fleet-installer-win-x64.exe` and double-click it, or run in PowerShell:
 ```powershell
-Invoke-WebRequest -Uri https://github.com/Apra-Labs/apra-fleet/releases/latest/download/apra-fleet-installer-win-x64.exe -OutFile apra-fleet-installer.exe; .\apra-fleet-installer.exe install
+Invoke-WebRequest -Uri https://github.com/Apra-Labs/apra-fleet/releases/latest/download/apra-fleet-installer-win-x64.exe -OutFile apra-fleet-installer.exe; .\apra-fleet-installer.exe
 ```
 
 Intel Macs: there is no prebuilt `darwin-x64` binary -- build from source (see
@@ -604,20 +810,23 @@ Download the installer for your platform from
 - `apra-fleet-installer-darwin-arm64` -- macOS (Apple Silicon)
 - `apra-fleet-installer-win-x64.exe` -- Windows
 
-Then run it:
+Double-click the downloaded file, or run it from the terminal. Installation is the default action:
 
 ```bash
-# macOS (Apple Silicon)
-chmod +x apra-fleet-installer-darwin-arm64 && ./apra-fleet-installer-darwin-arm64 install
+# macOS (Apple Silicon) -- no subcommand needed; installation is the default
+chmod +x apra-fleet-installer-darwin-arm64 && ./apra-fleet-installer-darwin-arm64
 
 # Linux (x64)
-chmod +x apra-fleet-installer-linux-x64 && ./apra-fleet-installer-linux-x64 install
+chmod +x apra-fleet-installer-linux-x64 && ./apra-fleet-installer-linux-x64
 ```
 
 ```powershell
 # Windows
-.\apra-fleet-installer-win-x64.exe install
+.\apra-fleet-installer-win-x64.exe
 ```
+
+> The `install` subcommand is still accepted and does the same thing:
+> `./apra-fleet-installer install` works exactly as before.
 
 ## What `install` writes
 
@@ -626,13 +835,65 @@ chmod +x apra-fleet-installer-linux-x64 && ./apra-fleet-installer-linux-x64 inst
 | `~/.apra-fleet/bin/apra-fleet[.exe]` | The fleet binary |
 | `~/.apra-fleet/hooks/` | Shell hooks (statusline, etc.) |
 | `~/.apra-fleet/scripts/` | Helper scripts |
+| `~/.apra-fleet/node_modules/` | Shared on-disk workflow runtime (`@apralabs/apra-fleet-workflow`, `@apralabs/apra-fleet-client`, vendored `ajv` + deps) that `apra-fleet workflow <name>` and any user-authored workflow resolve bare specifiers against -- see `docs/authoring-workflows.md` |
+| `~/.apra-fleet/schemas/` | Installed agent role verdict/input JSON schemas (17 files); the `APRA_FLEET_SE_SCHEMAS_DIR` default the workflow launcher sets |
+| `~/.apra-fleet/workflows/` | Installed workflows (`.installed.json` + one directory per workflow, built-in or user-authored); run with `apra-fleet workflow <name> [args...]` -- see `docs/authoring-workflows.md` |
 | `~/.claude/skills/fleet/` | Fleet skill (MCP tool docs for Claude) |
 | `~/.claude/skills/pm/` | PM orchestration skill |
+| `~/.claude/skills/pm/cost.js` | Auto-generated CJS module with sprint cost functions (all providers with PM) |
+| `~/.claude/workflows/auto-sprint.js` | Full auto-sprint workflow (Claude only) |
+| `~/.claude/skills/auto-sprint-args/` | Args contract for the `/auto-sprint` workflow (Claude only) |
+| `~/.claude/skills/fleet-sprint-cli/` | How to launch `apra-fleet workflow fleet-sprint` -- flag contract, preconditions, detached launch (all providers) |
+| `~/.claude/agents/` | PM role-agent files (planner, doer, reviewer, etc.), plus `schemas/` and `_shared/` -- written whenever PM is installed and the provider has an agents directory (not codex/copilot) |
 
 For other providers, these are written to that provider's skill/config directories. For example, for Antigravity (`agy`), settings are written to `~/.gemini/antigravity-cli/settings.json`, and hooks / MCP configs are merged into `~/.gemini/config/hooks.json` and `~/.gemini/config/mcp_config.json`.
 
+This local install only covers the machine you run it on. Remote fleet members get their own copy of the PM agent files independently -- `register_member` and `update_member` push them on first contact, and `execute_prompt` re-checks and re-provisions any missing or stale files on first dispatch to that member each server run (so an existing member picks up new agent files after you upgrade Fleet, without needing to be re-registered). Local members are unaffected -- they share the operator's home directory above.
+
 The install also registers the MCP server (`claude mcp add apra-fleet`) and
 configures a status bar icon showing fleet member activity.
+
+### Two sprint entry points -- do not confuse them
+
+`apra-fleet` ships **two separate, independently maintained** sprint
+implementations:
+
+| | `auto-sprint` (Claude Code workflow) | `fleet-sprint` (apra-fleet CLI workflow) |
+|---|---|---|
+| Written by | `install` (table above) | The root `@apralabs/apra-fleet` npm package's `bin.fleet-sprint`, resolving to `dist/fleet-sprint.mjs` |
+| Providers | Claude Code only | Any provider a fleet member is registered with (Claude, Gemini, Codex, Copilot, Antigravity/agy) |
+| Source package | `packages/apra-fleet-se/apra-pm/.claude/workflows/auto-sprint.js` | `packages/apra-fleet-se` (esbuild-bundled, apra-fleet-3ns.2) |
+| Model selection | Literal Claude model names | Fleet's `cheap`/`standard`/`premium` tier keywords, per-member |
+| How you run it | `/auto-sprint <bead-ids>` inside a Claude Code session (the Workflow tool) | `apra-fleet workflow fleet-sprint --issue ... --members ... --branch ... --base ...` -- the normal form. The same bundle is also exposed directly as a `fleet-sprint` bin (`npx fleet-sprint ...`, or bare if `@apralabs/apra-fleet` is installed with `-g`). See `packages/apra-fleet-se/docs/cli-reference.md` |
+
+If you installed `apra-fleet` via `npm install -g @apralabs/apra-fleet`
+(or `npx @apralabs/apra-fleet`), the `fleet-sprint` bin is available
+immediately alongside `apra-fleet` -- no separate install step. It requires
+the `apra-fleet` MCP server to be reachable (it spawns/connects to it over
+stdio the same way `apra-fleet` itself does); see
+`packages/apra-fleet-se/docs/cli-reference.md` for its server- and
+schema-resolution order across dev/bundled/standalone layouts.
+
+### The `apra-fleet workflow <name>` subcommand
+
+`install` also populates `~/.apra-fleet/node_modules/`, `~/.apra-fleet/schemas/`,
+and `~/.apra-fleet/workflows/` (see the directory table above) so that
+`apra-fleet workflow <name> [args...]` -- the SEA-binary workflow runner --
+can run built-in workflows (`fleet-sprint`, `hello-world`) or any
+user-authored workflow with zero system Node required. See
+`docs/authoring-workflows.md` for the full authoring contract.
+
+The workflow launcher and the `apra-fleet` MCP server it talks to are
+always separate processes. Set `APRA_FLEET_TRANSPORT=http` (the default) or
+`APRA_FLEET_TRANSPORT=stdio` to control how the launcher reaches that
+server: `http` (default) attaches to the already-running installed-service
+singleton at `http://localhost:${APRA_FLEET_PORT:-7523}/mcp` and spawns
+nothing; `stdio` self-spawns a private server the same way the `fleet-sprint`
+bin does. See `docs/adr-workflow-server-resolution.md` for the full
+resolution order (this same order also governs where role schemas resolve
+from in the installed-binary case: `APRA_FLEET_SE_SCHEMAS_DIR`, set by the
+launcher to `~/.apra-fleet/schemas`, is now tier 1 of the schema resolution
+described in `packages/apra-fleet-se/docs/cli-reference.md`).
 
 **What `install` does NOT do:**
 
@@ -662,12 +923,15 @@ By default, `install` configures Apra Fleet for **Claude Code**. Use the `--llm`
 flag to install for a different provider instead:
 
 ```bash
-apra-fleet install --llm agy         # Google Antigravity CLI
-apra-fleet install --llm codex       # OpenAI Codex CLI
-apra-fleet install --llm copilot     # GitHub Copilot CLI
-apra-fleet install --llm gemini      # Gemini CLI
-apra-fleet install --llm claude      # Claude Code (the default)
+apra-fleet --llm agy         # Google Antigravity CLI
+apra-fleet --llm codex       # OpenAI Codex CLI
+apra-fleet --llm copilot     # GitHub Copilot CLI
+apra-fleet --llm gemini      # Gemini CLI
+apra-fleet --llm claude      # Claude Code (the default)
 ```
+
+The `install` subcommand is also accepted and does the same thing:
+`apra-fleet install --llm agy` works exactly as before.
 
 `--llm` decides which provider's configuration the installer writes to. The MCP
 server registration, hooks, statusline, permissions, and skills all go into that
@@ -704,8 +968,9 @@ OAuth.
 ## Uninstall
 
 The built-in uninstall command surgically removes MCP registration,
-permissions, hooks, status line, and skill directories without touching your
-other settings:
+permissions, hooks, status line, skill directories, and PM agent files
+(`~/.claude/agents/`, or the equivalent provider directory) without touching
+your other settings:
 
 ```bash
 apra-fleet uninstall
@@ -717,7 +982,16 @@ apra-fleet uninstall
 | `--force` | Automatically stop the running fleet server before uninstalling |
 | `--yes` | Skip the confirmation prompt |
 | `--llm <provider>` | Remove only a specific provider (`claude`, `agy`, `codex`, `copilot`, `gemini`) |
-| `--skill fleet\|pm\|all` | Remove only the specified skill directories (default: `all`) |
+| `--skill fleet\|pm\|workflows\|all` | Remove only the specified skill directories (default: `all`) |
+
+`--skill workflows` removes the shared workflow runtime and schemas
+(`~/.apra-fleet/node_modules/`, `~/.apra-fleet/schemas/`) plus only the
+built-in workflow subdirectories under `~/.apra-fleet/workflows/` (read from
+`workflows/.installed.json`'s `builtin` list, falling back to the static
+built-in name list if that manifest is missing). Any user-authored
+`workflows/<name>/` directories are left in place, and the command reports
+which ones it kept; the `workflows/` root itself is only removed if nothing
+user-authored remains in it.
 
 Examples:
 
@@ -733,6 +1007,9 @@ apra-fleet uninstall --skill pm
 
 # Remove only Claude's fleet skills
 apra-fleet uninstall --llm claude --skill fleet
+
+# Remove only the workflow runtime + built-in workflows, keep user-authored ones
+apra-fleet uninstall --skill workflows
 ```
 
 If the fleet server is running, uninstall aborts and tells you to re-run with
@@ -795,6 +1072,61 @@ This checks the latest GitHub release, downloads the installer for your
 platform, and re-runs it automatically. The server restarts with the new
 binary. If you are already on the latest version it reports so and exits. Full
 detail: [docs/features/update.md](features/update.md).
+
+### Stopping a running server before an overwrite install
+
+`install --force` (and `update`, which drives the same path) must stop the
+currently-running server before copying the new binary over the installed
+path, since the OS refuses to overwrite a binary that is still mapped into a
+running process. A single termination signal followed by a fixed delay is not
+reliable: a singleton that is mid-request can take longer to exit than an
+arbitrary fixed sleep, and a copy attempted before it actually exits fails
+outright and leaves the old server running.
+
+The install path instead polls process liveness over a bounded grace window
+after the initial termination signal, and escalates to a harder kill signal
+if the process is still alive once that window elapses, polling again over a
+second (shorter) window before giving up. The binary copy is only attempted
+once the old process is confirmed gone. Symmetrically, the "stopped running
+server" success message is gated on that same confirmation rather than
+printed unconditionally -- if the process is still detected running after
+both the initial signal and the escalation, install reports a clear error
+(with the manual kill command for the platform) and exits non-zero instead of
+proceeding into a copy that would fail anyway or claiming success it can't
+back up.
+
+### Replaying the npm-publish smoke step locally with an unrelated server running
+
+CI's "Pack + install into a clean temp prefix (fleet-sprint smoke test)" step
+packs the CLI and installs it into an isolated, throwaway prefix. That step
+(and any local replay of it) is safe to run even while an unrelated
+apra-fleet server is already up on the same machine, because the
+running-process guard is scoped to the install being performed rather than
+to any apra-fleet process anywhere on the OS: it only fires when the running
+server's data dir matches the data dir this install targets, or when the
+running executable it detects lives under the install prefix being written
+(the ETXTBSY case). A server running against a different data dir and a
+different install prefix does not trip it.
+
+To replay the step locally, isolate the install the same way CI does by
+pointing these env vars at throwaway locations before running
+`apra-fleet install`:
+
+- `HOME` (or `USERPROFILE` on Windows) -- so the default data dir and install
+  prefix resolve under a temp directory instead of your real home.
+- `APRA_FLEET_DATA_DIR` -- overrides the data dir directly if you want it
+  separate from `HOME`.
+- The install prefix (where the packed CLI is installed) -- point it at a
+  clean temp directory distinct from any prefix an existing server was
+  installed into.
+
+`install --force` is not needed for this replay, and must not be used just
+to kill an unrelated apra-fleet server -- `--force` exists to stop the
+server that owns the install being overwritten, not to clear the machine of
+unrelated servers so a differently-scoped install can proceed. As long as
+the data dir and install prefix are isolated from any running server, a
+plain `apra-fleet install` (no `--force`) completes without the guard
+firing.
   </doc>
 
   <doc title="Update" desc="Keeping Fleet and its members updated.">
@@ -842,22 +1174,27 @@ needed.
 6. Spawns the installer detached, then exits with status 0:
 
    ```
-   <installer> install --force --llm <provider> --skill <skill>
+   <installer> install --force --llm <provider> --skill <skill> --workflows <mode>
    ```
 
    `--force` makes the installer stop the running apra-fleet server before
-   replacing the binary. The `--llm` and `--skill` values come from
-   `install-config.json` (see below).
+   replacing the binary. The `--llm`, `--skill`, and `--workflows` values come
+   from `install-config.json` (see below).
 
 Any unexpected error is caught and printed as `Error: Update failed -- <message>`.
 
 ## install-config.json
 
 `update` reads `~/.apra-fleet/data/install-config.json` and uses the first
-provider entry to recover the `--llm` provider and its `--skill` set, so the
-update preserves the original install configuration. If the file is missing or
-cannot be parsed, `update` prints a warning and falls back to
-`--llm claude --skill all`.
+provider entry to recover the `--llm` provider, its `--skill` set, and its
+persisted `workflowsMode` (`all` or `none`), so the update preserves the
+original install configuration -- including refreshing built-in workflow
+assets to the new version while leaving any user-authored workflows on disk
+untouched. `workflowsMode` is optional for backward compatibility: an
+`install-config.json` written before the workflow subsystem existed won't
+have the field, so `update` defaults it to `all`, matching a fresh install.
+If the file is missing or cannot be parsed, `update` prints a warning and
+falls back to `--llm claude --skill all --workflows all`.
 
 ## Stopping and restarting the server
 
@@ -1431,6 +1768,42 @@ Fleet supports Claude, Antigravity (agy), Codex, Copilot, and Gemini. Members ca
 - **`max_turns` is Claude-only.** On Gemini, Codex, Copilot, and Antigravity, use `timeout_s` instead to bound execution time.
 - **Copilot needs a paid GitHub Copilot subscription** (Pro, Business, or Enterprise) and has the smallest context window (64K). It is best suited for smaller, focused tasks.
 
+## Mixing providers in one fleet
+
+Every member runs its own LLM backend, and they collaborate across vendors. Put
+a Claude doer with an Antigravity reviewer, or the reverse -- the reviewer's model
+disagrees with the doer's by construction, so it catches issues a same-model
+review would wave through.
+
+A fleet that has run in production:
+
+```
+pm-1      Opus 4.7        orchestrator
+doer-1    Sonnet 4.6      feature work
+doer-2    Antigravity     large-context tasks
+reviewer  Opus 4.7        final review
+```
+
+**OpenCode and local models.** OpenCode works with any OpenAI-compatible
+endpoint (Ollama, vLLM, etc.), so it is the provider for self-hosted models.
+The model endpoint is the user's responsibility -- Fleet installs the CLI and
+agents but does not provision or manage the inference server. Configure the
+provider and base URL in `opencode.json`; see
+[opencode-exploration.md](opencode-exploration.md) for details.
+
+Because OpenCode members can run any model, model tiers (cheap / standard /
+premium) are set per member at registration via `model_tiers` in
+`register_member`. A single-model entry fills all three tiers.
+
+**Registering a member from a shell.** `apra-fleet register-member --name
+<name> --path <folder> [options]` is a shell-drivable equivalent of the
+`register_member` MCP tool, for contexts that can run shell commands but
+cannot make MCP tool calls (scripted setup, CI, an agent role without MCP
+tool access). It shares the exact same validation and registration logic as
+the MCP tool -- both converge on one underlying registration function, so
+the two entry points can never drift apart. Run `apra-fleet register-member
+--help` for the full flag reference.
+
 ---
 
 To override which model each tier resolves to on a per-provider basis, see
@@ -1808,119 +2181,6 @@ The two skills in this repository are the best reference:
 Read those alongside this page when designing your own.
   </doc>
 
-  <doc title="PM Skill" desc="The Project Manager skill reference -- commands, usage, and patterns.">
----
-name: pm
-description: Project Manager — plans, executes, monitors, and resumes multi-step work across fleet members. Delegates to members, tracks progress, drives reviews and deploys. Never writes code directly.
-note: This skill requires the 'fleet' skill to function.
----
-
-# PM — Project Manager Skill
-
-You are a Project Manager (PM) that orchestrates work across fleet members.
-
-## Dependency Bootstrap
-
-**IMPORTANT — Before proceeding with any PM task:**
-
-This skill depends on the `fleet` skill. If it is not already active, activate it now using your provider's skill activation mechanism before continuing.
-
----
-
-
-## Sprint Selection
-
-Before starting any sprint, choose the appropriate variant:
-
-| Condition | Sprint type |
-|-----------|-------------|
-| 1–3 tasks, completable in one session | `simple-sprint.md` |
-| Work splits into parallel tracks (e.g. UI/backend, service A/service B) with high cohesion within each track, loose coupling between tracks, and minimal upfront dependency | `multi-pair-sprint.md` |
-| Default | `single-pair-sprint.md` |
-
-If tracks are tightly coupled or share significant upfront dependencies, use single-pair — splitting tightly coupled work across pairs creates more coordination overhead than it saves.
-
----
-
-## Available Commands
-
-- `/pm init <project>` — Initialize project folder and templates. See init.md.
-- `/pm pair <member> <member>` — Pair doer↔reviewer. Update icons (doer=circle, reviewer=square, same color) via `update_member`. See doer-reviewer.md.
-- `/pm plan <requirement>` — Triggers Phase 2 (Plan Generation). See single-pair-sprint.md. User provides requirements.md.
-- `/pm start <member>` — Begin Phase 3 execution. Before dispatch: complete doer-reviewer.md setup checklist and pre-flight checks. Plan must be APPROVED (planned.json exists in `<project>/`). Sends task harness (agent context file, PLAN.md, progress.json) to doer and kicks off execution.
-- `/pm status <member>` — Check in-flight tasks (via Beads), progress.json, and git log.
-- `/pm resume <member>` — Resume after a verification checkpoint
-- `/pm deploy <member>` — Execute the project's deployment runbook. First, `receive_files` to pull `deploy.md` from the repo root or `docs/` folder via any available member. If it doesn't exist in the repo, create a copy locally from `tpl-deploy.md`, fill in the project's deploy and verify steps, then `send_files` to the doer's repo root and have them commit it before proceeding. Once deploy.md is in place, execute each step via `execute_command` on the target member, then run the Verify section to confirm the deploy succeeded.
-- `/pm recover <project>` — After PM restart: check in-flight tasks via Beads for instant orientation, then inspect member state. See single-pair-sprint.md, simple-sprint.md, or multi-pair-sprint.md.
-- `/pm cleanup <project>` — At sprint completion: run cleanup on doer and reviewer, close Beads epic, then raise the PR. See cleanup.md.
-- `/pm backlog` — Query and manage deferred items via Beads. See beads.md.
-- `/pm tasks` — Show current sprint's Beads task tree (`bd show <epic-id> --tree`). See beads.md.
-
-## Beads — Persistent Task DB
-
-PM uses Beads (`bd` CLI, installed by `apra-fleet install`) as the persistent task database across all sprints. See `beads.md` for the full reference.
-
-**Session start rule:** Always run `bd ready` (from PM's own directory — the central Beads DB) before opening any `status.md`. This gives an instant cross-sprint view of what's in-flight across all projects and members — no file reading required for orientation.
-
-**Central DB rule:** PM runs `bd init` once in PM's own working directory — NOT inside each project repo. One Beads DB tracks all projects, all members, all sprints. `bd list --all --pretty` gives a global view without switching directories.
-
-**Lifecycle hooks (enforced — not optional):**
-- `/pm init` → `bd init` (PM root, idempotent) + `bd create` sprint epic + record epic-id in `status.md`
-- `/pm plan` (after approval) → `bd create` one task per PLAN.md item + `bd dep add` for dependencies
-- `/pm start` / task dispatch → `bd update <id> --assignee <member> --status in_progress`
-- VERIFY checkpoint done → `bd close <id>`
-- Reviewer CHANGES NEEDED → `bd create` a task per HIGH finding
-- `/pm cleanup` → `bd close <epic-id>` before raising PR
-
-## Core Rules
-
-1. NEVER read code, diagnose bugs, or suggest fixes — assign a member.
-2. **Project sandboxing** — The PM root contains one subfolder per project. Every artifact (`status.md`, `requirements.md`, `design.md`, `deploy.md`, `planned.json`, `permissions.json`, PLAN.md, progress.json, feedback.md) lives inside `<project>/` and nowhere else. Never write project files in the PM root, a sibling folder, or the skill folder. If you're about to write outside `<project>/`, stop and relocate first.
-3. On session start: Read each active project's `status.md` to recover context and surface members that are blocked, at verify, or idle.
-   - Update `status.md` whenever a dispatch completes or a member reports back — not just at phase boundaries
-   - Local files are the source of truth — never rely on memory across sessions
-4. Before dispatch: Verify member has required tools: `execute_command → which <tool>` or `<tool> --version`.
-5. If a member can finish in one session (1-3 steps), use ad-hoc `execute_prompt`. Otherwise use the task harness.
-6. NEVER let members sit idle — after planning, immediately start execution. At verify checkpoints, immediately dispatch reviews.
-7. During execution: keep going until stuck or done — don't wait for the user. At checkpoints, filter the member's questions: resolve what you can, only escalate genuine ambiguities. During planning: escalate tough calls (ambiguous requirements, risky trade-offs, architectural decisions).
-8. When executing a sequence of fleet calls — any combination of `send_files`, `execute_command`, `execute_prompt`, `receive_files` — club them into a single background Agent rather than issuing individual calls or multiple background agents.
-9. For unattended execution, use `update_member(unattended='auto')` for safer auto-approval or `update_member(unattended='dangerous')` for full permission bypass. Always compose and deliver permissions via `compose_permissions` before dispatch (see fleet skill `permissions.md`). Do NOT pass `dangerously_skip_permissions` to `execute_prompt` — it is deprecated and ignored.
-10. During a sprint, PLAN.md, progress.json, and feedback.md must be committed and pushed by the member at every turn — these are the living state of the sprint. Only the agent context file stays uncommitted. See context-file.md and doer-reviewer.md for details.
-11. Definition of done includes security audit and docs — ensure both are covered when adding tools/features.
-12. At sprint completion: raise a PR, verify CI is green — do NOT merge. Merge is the user's decision.
-13. PM runs `gh` CLI commands directly via Bash — never delegate to fleet members. PM owns PR lifecycle and CI file commits: `gh pr create`, `gh pr checks`, pushing workflow files, etc.
-14. Always read referenced sub-documents (doer-reviewer.md, fleet skill sub-docs, etc.) before executing PM commands.
-
-## Secrets & Credentials
-
-See fleet skill `Secure Credentials` section for the full reference.
-
-PM-specific rule: never pass raw secrets in `execute_prompt` prompts — reference the credential by name only (e.g. `"authenticate using credential github_pat"`). The member then uses `{{secure.github_pat}}` in its own `execute_command` calls.
-
-## Sub-documents
-
-- `single-pair-sprint.md` — full sprint lifecycle: requirements, planning, execution loop, monitoring, completion, recovery
-- `simple-sprint.md` — lightweight flow for small, single-session tasks
-- `multi-pair-sprint.md` — running parallel pairs on separate git branches
-- `doer-reviewer.md` — doer/reviewer pairing, flow, pre-flight checks, safeguards
-- `context-file.md` — agent context file: provider filename lookup, role templates, delivery rules
-- `cleanup.md` — sprint cleanup command and PR raise procedure
-- `init.md` — project folder initialization
-- `beads.md` — Beads persistent task DB: commands, lifecycle hooks, backlog ops, cross-sprint patterns
-- `tpl-*.md` — various templates sent to members via `send_files`, never loaded into PM context — PM substitutes `{{token}}` placeholders before sending
-
-## Model Selection
-
-See fleet skill `Model Tiers` section.
-
-
-## Provider Awareness
-
-See fleet skill `Provider Awareness` section for general provider differences.
-
-PM-specific: agent context file filename is provider-dependent — see `context-file.md`.
-  </doc>
-
   <doc title="Beads" desc="How Fleet uses Beads -- the bundled open-source issue tracker and the PM skill's persistent task database.">
 <!-- llm-context: Reference for how Apra Fleet uses Beads, the bundled open-source issue tracker. Consult when a user asks about bd commands, task tracking, sprint epics, backlog management, or the PM skill's persistent task state. -->
 <!-- keywords: Beads, bd, task, epic, sprint, backlog, pm, lifecycle, dependency, issue tracker, bd ready, bd create, bd close -->
@@ -1951,6 +2211,7 @@ persistent task database across all sprints and sessions.
 | `bd ready` | Show all unblocked, open tasks across all sprints |
 | `bd list --all --pretty` | Full tree: all projects, members, tasks, status |
 | `bd create "<title>" -p <pri> --parent <epic-id> --assignee <member>` | Create a task |
+| `bd create "<title>" --id <explicit-id>` then `bd update <explicit-id> --parent <epic-id>` | Create a task with a pre-decided id under a parent -- `bd create` rejects a call that combines `--id` and `--parent` in the same invocation, so an explicit id and a parent link are always two separate calls, never one |
 | `bd show <id> --json` | Full detail for one task |
 | `bd update <id> --status in_progress --assignee <member>` | Mark a task in progress |
 | `bd close <id>` | Mark a task complete (idempotent) |
@@ -1999,6 +2260,24 @@ bd dep add <sprint-B-epic-id> <sprint-A-epic-id>
 Session crash? Run `bd list --all --pretty`. The PM sees every member's state
 across every active project without reading a single file. Then `bd show <id>`
 for full context on any item.
+
+## Multi-member sync (Dolt-backed clones)
+
+Each member's beads DB is an embedded Dolt clone. `apra-fleet install` also
+provisions a portable Dolt CLI binary alongside `bd` (verified with a version
+check at install time) -- this is a hard prerequisite for any sync path that
+needs to inspect or resolve a Dolt clone directly, not merely an optional
+extra. When more than one member's clone needs to reconcile against a shared
+Dolt remote (for example, an autonomous multi-member sprint whose members are
+genuinely independent checkouts rather than one shared workspace), reads and
+writes are bracketed with a pull before and a push after so no member's clone
+observes stale state for long, and every cross-member push is serialized
+through a single coordinating authority -- a Dolt clone can hard-conflict on a
+concurrent same-row write, and one unresolved conflict wedges that clone's
+sync entirely, so multi-writer coordination is a correctness requirement, not
+a performance nicety. See `packages/apra-fleet-se/docs/architecture.md`'s
+"Dolt sync discipline" section for the full mechanism and its conflict
+recovery ladder.
 
 ---
 
@@ -2091,6 +2370,14 @@ Fleet can configure member permissions. Ask it to, for example, "Grant
 | Codex | `.codex/config.toml` (approval mode) |
 | Copilot | `.github/copilot/settings.local.json` |
 
+**Permission granted but still denied on Claude**
+
+Claude Code only honors `.claude/settings.local.json` permissions once the
+project folder is a **trusted workspace**. If the member's work folder has
+never been opened and trusted in Claude Code directly, the permissions Fleet
+writes there are inert. Open the folder in Claude Code once and accept the
+trust prompt, then retry.
+
 ## Timeouts
 
 A dispatch can end in two distinct ways:
@@ -2159,45 +2446,255 @@ reference and more `jq` examples.
   <doc title="Roadmap" desc="What is planned next for Apra Fleet.">
 # Roadmap
 
-This roadmap reflects current plans. Priorities shift based on community feedback.
-Have an idea? [Open a feature request](https://github.com/Apra-Labs/apra-fleet/issues/new/choose).
+This roadmap is grounded in the repo's actual git history and issue tracker
+(beads), not aspiration. "Shipped" means it is on `main`. "In flight" means
+there is a recently-active branch with real commits behind it. The forward
+sections are a projection of where the current trajectory leads; priorities
+shift based on what the fleet itself surfaces while building this codebase.
 
-Items marked [*] are good first issues for new contributors.
+Have an idea? [Open a feature request](https://github.com/Apra-Labs/apra-fleet/issues/new/choose).
 
 ---
 
-## Near-term (next 1-2 sprints)
+## What's shipped
 
-- [ ] **npm publish** -- Publish to npm so users can `npx apra-fleet install` [*]
-- [ ] **HTTP+SSE transport** -- MCP HTTP+SSE transport enabling remote members to connect over the network
-- [ ] **Web dashboard** -- Browser UI for fleet topology, member status, live prompt monitoring, token/cloud cost visibility, git activity, and audit trail; VS Code extension embeds the same view with clickable file paths ([discussion #188](https://github.com/Apra-Labs/apra-fleet/discussions/188))
-- [ ] **Memory plane integration** -- Connect fleet agents to codebase knowledge indices so task planning starts from a structured map of architecture and relevant files rather than blind token-expensive discovery; encompasses persistent inter-session memory and sprint-accumulated knowledge graphs ([RFC #265](https://github.com/Apra-Labs/apra-fleet/discussions/265), [discussion #249](https://github.com/Apra-Labs/apra-fleet/discussions/249), [PR #266](https://github.com/Apra-Labs/apra-fleet/pull/266))
-- [ ] **Session log export** -- One-click markdown export of `fleet logs` output from the dashboard; builds on session history and listing work ([issue #189](https://github.com/Apra-Labs/apra-fleet/issues/189)) [*]
-- [ ] **Member groups / tags** -- Tag members (e.g. `gpu`, `build`, `test`) and target prompts at groups; categorized grouping in status output ([PR #238](https://github.com/Apra-Labs/apra-fleet/pull/238))
+### The fleet-sprint engine and the workflow platform (v0.4.0 line)
 
-## Medium-term (1-2 months)
+- **`fleet-sprint`: an autonomous multi-agent sprint engine** -- plan ->
+  develop -> review -> harvest cycles run by planner/doer/reviewer role
+  agents against a real git repo, with beads (`bd`) as the task DAG and
+  Dolt as the sync backend. Renamed from `auto-sprint` to end the
+  confusion with Claude Code's unrelated `/auto-sprint` script; source
+  lives in `packages/apra-fleet-se/fleet-sprint/`, and this repository is
+  itself built by it (see the dashboard recording in README.md).
+- **`apra-fleet workflow <name>`: a general-purpose workflow runner** --
+  the `packages/apra-fleet-workflow` engine gives workflows typed errors,
+  budget enforcement, resumable/replayable runs, and cooperative `/stop`
+  cancellation. fleet-sprint is the first workflow shipped on it.
+- **`apra-fleet-se`: an always-on multi-sprint supervisor (preview)** --
+  runs several sprints concurrently against a shared fleet with a
+  member + issue-scope reservation ledger, a PID-liveness watchdog with
+  restart re-adoption, orchestrator-bracketed git+Dolt sync with a
+  scripted-first conflict ladder, and a sprint-stack dashboard (running
+  sprints, history, backlog tree) on one reverse-proxied port. Shipped in
+  the big v0.4.0 merge (`732dc38d`) and hardened in #362; still gated
+  "preview" because the full end-to-end supervisor smoke cycle has not yet
+  passed cleanly.
+- **Sprint reliability hardening (#362 and the mac1 dogfood run)** --
+  credential-auth self-heal via `provision_vcs_auth`, orphaned-CLI
+  recovery, PID-liveness "lease of life" so a flaky channel no longer
+  produces false empty-response failures, a stall detector that watches
+  all transcript activity (not just chat) and kills confirmed stalls,
+  and dispatch-vs-sync failure separation so a Dolt/git push hiccup no
+  longer burns a full LLM re-dispatch (`apra-fleet-6z8.*`).
+- **MCP transport defaults to streamable HTTP** -- one long-lived
+  `apra-fleet run` server on `localhost:7523/mcp` shared by every
+  provider, replacing per-session stdio subprocesses; `--stdio` remains
+  as an alias.
+- **apra-pm "comes home"** -- the `vendor/apra-pm` submodule is gone;
+  apra-pm is a package-local dependency at `packages/apra-fleet-se/apra-pm`,
+  which removed a whole class of silent submodule drift in CI/e2e/packaging.
+- **Deterministic e2e harness** -- fleet setup/teardown is a script, not
+  an LLM improvisation (#353), checkpoint consolidation is deterministic
+  (#360), and turn-budget/git-auth/log-collection flakes were fixed (#359).
 
-- [ ] **Agent-to-agent communication** -- Members communicate directly, not only through coordinator ([discussion #196](https://github.com/Apra-Labs/apra-fleet/discussions/196), [issue #152](https://github.com/Apra-Labs/apra-fleet/issues/152))
-- [ ] **Playbooks** -- JIT-compiled orchestration sequences: write environment-neutral runbooks once, fleet compiles them to native scripts per device and caches them; zero LLM cost on repeat runs with autonomous repair on failure ([discussion #194](https://github.com/Apra-Labs/apra-fleet/discussions/194))
-- [ ] **PM as full product lifecycle manager** -- Extend the PM skill through deploy, integration verification, quality grading, log monitoring, and backlog reprioritization; closes the loop beyond PR approval ([discussion #198](https://github.com/Apra-Labs/apra-fleet/discussions/198))
-- [ ] **Extension layer** -- Org-private skills and template overrides that survive fleet updates via a shadowing directory (`~/.apra-fleet/extensions/`); foundation for a community marketplace ([discussion #195](https://github.com/Apra-Labs/apra-fleet/discussions/195))
-- [ ] **Expanded member targets** -- Docker containers, Kubernetes pods, WSL instances, Azure VMs, and GCP VMs as first-class fleet members; includes per-instance data dir isolation for multi-fleet on the same machine ([PR #231](https://github.com/Apra-Labs/apra-fleet/pull/231))
-- [ ] **Multiple providers per member** -- Assign more than one LLM provider to a member and switch between them without re-registration ([issue #125](https://github.com/Apra-Labs/apra-fleet/issues/125))
-- [ ] **Slack notifications** -- Notify a Slack channel when members go offline, get blocked, or complete a task ([issue #77](https://github.com/Apra-Labs/apra-fleet/issues/77))
+### Providers and members (v0.3.x line)
 
-## Long-term (3+ months)
+- **OpenCode provider** -- full adapter (NDJSON parseResponse, session
+  management, permissions/auth), per-member `model_tiers` with
+  dispatch-time resolution and validation against available models,
+  GLM-4.5-Air premium default, e2e suites on GitHub-hosted runners, and
+  `docs/opencode-getting-started.md`. This is the door to local/self-hosted
+  OpenAI-compatible models.
+- **Antigravity (agy) provider maturation** -- `--agent` flag dispatch,
+  session-resume fixes, safety rationalization (`docs/agy-safety-rationalization.md`).
+- **Role-agent file installation, including remote members** --
+  `apra-fleet install` writes planner/doer/reviewer/plan-reviewer agent
+  definitions into each provider's agents directory, and `update_member`
+  provisions them to remote members too (#336).
+- **Member categories and tags** -- `category` plus up to 10 `tags` on
+  register/update, tag-filtered `list_members`, and tag-driven
+  `compose_permissions` profile merging (#314). This shipped what the old
+  roadmap called "member groups".
+- **No-LLM members** -- `llm_provider: none` for machines that only run
+  commands or host services (GPU nodes, relays).
+- **Live member activity viewer** -- `apra-fleet watch` streams what every
+  member is doing (#319).
+- **CLI ergonomics** -- `install` is the default action, `run` starts the
+  MCP server (v0.3.3); bare Claude model aliases instead of pinned dated
+  IDs (v0.3.4); npm packaging and the SEA binary coexist, including the
+  Windows `build:binary` fix.
 
-- [ ] **Fleet-as-a-Service** -- Hosted version for teams that don't want to self-host
-- [ ] **Multi-fleet federation** -- Connect multiple fleet servers for cross-team orchestration
-- [ ] **Terraform / Pulumi provider** -- Infrastructure-as-code for fleet topology
-- [ ] **Audit log** -- Immutable append-only record of all fleet operations and secret usage for enterprise governance ([issue #159](https://github.com/Apra-Labs/apra-fleet/issues/159)) [*]
+### Shipped, then deliberately pulled back
+
+- **Knowledge bank v1 (#296)** -- kb_query/kb_harvest/kb_promote MCP
+  tools, KB server, HTTP provider -- landed on `main` and was then
+  reverted (#303). The capability is being re-approached through the
+  code-intelligence abstraction (see in flight below) with eval evidence
+  this time, rather than re-landed wholesale.
+
+---
+
+## Currently in flight
+
+These are the recently-active branches with substantive work behind them,
+described honestly.
+
+1. **Supervisor viewer parity -- `feat/supervisor-viewer-parity`** (active
+   today). Bringing the apra-fleet-se supervisor dashboard up to parity
+   with the fleet-sprint viewer: server-side beads data for a Backlog
+   tree, Sprints/Backlog tabs, server-side filtering, header filters,
+   multi-select, workflow-UX language, plus Windows fixes (bd spawn via
+   shell, POSIX-only agent-existence check in execute_prompt). Mid-to-late
+   stage: the views exist and are being polished, not scaffolded.
+
+2. **apra-fleet-se productization and packaging -- `kj/fix-apra-fleet-se`
+   on top of `feat/sprint-service-1`** (active today). Making the
+   supervisor service actually installable and runnable outside the dev
+   tree: ESM bundle require-shim for CJS deps, shipping all runner
+   siblings, dev-manifest fixes for the retired vendor path, plus
+   supervisor test hardening (contention-aware scaled timeouts, live smoke
+   retest evidence for the eft.5x-8x bug family, engine round-resume
+   semantics). Late stage for packaging; the end-to-end supervisor smoke
+   gate is the remaining exit criterion.
+
+3. **Code intelligence / knowledge layer, round two --
+   `feat/code-intelligence-abstraction`, `chore/merge-main-into-code-intel`,
+   and the `test/kb-eval-a`/`test/kb-eval-b` A/B eval branches** (active
+   this week). A pluggable code-intel provider abstraction
+   (codebase-memory-mcp as default), a per-member `codeIntelProvider`
+   field with per-member routing in tool dispatch, repo-scoped
+   `kb_harvest` auto-harvest wired to execute_prompt completion, and
+   paired eval sprints measuring whether the KB actually helps. Mid stage:
+   core routing and harvest provenance are implemented and tested; the
+   merge-back branch (`chore/merge-main-into-code-intel`) is reconciling
+   it with current main.
+
+4. **Live dogfood hardening channel -- `fleet-sprint/mac1`** (active
+   today). Not a feature branch but a real fleet-sprint run on a macOS
+   member whose output is a steady stream of engine fixes: non-ASCII
+   sanitization in task descriptions, stall-poller timestamp scoping,
+   failed-streak exclusion from review dispatch, cost usage field-name
+   fix, POSIX-sh pipefail guards. This loop is now the primary way engine
+   bugs get found.
+
+5. **agy dynamic agent transform -- `feat/agy-agent-transform`** (last
+   commits ~5 days ago). Transforms fleet agent definitions into
+   Antigravity-native rules at dispatch time and fixes session resume
+   (FLEET_SESSION_ID parsing, `--continue` fallback). Small and mid stage.
+
+---
+
+## Near-term (next few weeks)
+
+The near-term is dominated by finishing what v0.4.0 opened, not by new
+surface area.
+
+- **Pass the supervisor end-to-end smoke gate and drop the "preview"
+  label.** The declared acceptance for the sprint-service epic -- a full
+  plan-develop-review-harvest cycle through apra-fleet-se against a live
+  sandbox -- has failed five attempted cycles; the root causes found so
+  far (phantom interactive sessions, dead-session timeouts, duplicate
+  doer commits on retry) are fixed but not yet proven together. This is
+  the single most important open item in the repo.
+- **Cut the v0.4.0 release.** `docs/release-notes-v0.4.0.md` is drafted
+  and `package.json` already says 0.4.0; landing supervisor-viewer-parity
+  and the se packaging fixes is what stands between the draft and a tag.
+- **Merge supervisor viewer parity** so the supervisor dashboard is a
+  strict superset of the fleet-sprint viewer, and make apra-fleet-se the
+  single supported entry point for running sprints (the CLI stays as the
+  low-level path).
+- **Land the code-intelligence abstraction with eval evidence.** The
+  kb-eval A/B branches exist precisely to avoid a second #303-style
+  revert: merge only what the paired sprints show is a measurable win,
+  behind the per-member/per-repo provider routing that already has tests.
+- **Windows parity as a standing near-term theme.** The recent bug record
+  (POSIX-only agent checks, bd ENOENT spawns, pipefail on non-bash shells,
+  the silent Windows SEA build failure) says cross-platform drift is the
+  most common regression class; expect continued small fixes plus
+  regression guards rather than one big effort.
+- **Finish and merge the agy agent transform** so all providers get role
+  agents through one transform pipeline instead of provider-specific hacks.
+
+## Mid-term (1-3 months)
+
+Extrapolating from what the architecture is clearly reaching toward:
+
+- **Hub-spoke cloud mode becomes usable.** The groundwork is already in
+  the tree -- `packages/fleet-api-contract`, `docs/hub-spoke-master-plan.md`,
+  the wire-protocol and hub-service-deployment docs, and the identity
+  model shipped in v0.4.0 -- but `apra-fleet join` / spoke mode is not
+  end-to-end yet. With HTTP transport now the default and the supervisor
+  a long-lived service, a hub that remote spokes attach to is the natural
+  next step, and it is the prerequisite for any hosted offering.
+- **Dashboard auth and RBAC.** `docs/dashboard-oauth-rbac-design.md`
+  exists for a reason: the moment the supervisor dashboard is the front
+  door to a shared, always-on service (and especially a hub), it needs
+  login and roles. Expect this to ride immediately behind hub-spoke.
+- **A second real workflow on apra-fleet-workflow.** The engine was
+  explicitly built for more than fleet-sprint (`docs/authoring-workflows.md`,
+  the workflow-core boundary refactoring doc). The credible proof that
+  "any workflow" is real is a shipped second workflow -- likely something
+  operational (release playbook automation or an e2e/integration runner)
+  since those already exist as semi-manual scripts in this repo.
+- **Knowledge layer graduates from experiment to default.** If the
+  kb-eval results hold up, the trajectory is: code-intel provider on by
+  default for sprint members, repo-scoped harvest on session close, and
+  then the central/team KB server re-landed from the reverted #296 work --
+  in that order, each behind evidence.
+- **Cost governance surfaces in the dashboard.** The pieces exist
+  (`docs/cost-model.md`, `get_member_model_pricing`, per-turn cost
+  calculation that just got a field-name fix on mac1); the missing piece
+  is per-sprint/per-member cost rollups where operators actually look --
+  the supervisor dashboard.
+- **Sprint calibration data starts steering sprints.** The engine already
+  writes `sprint calibration` and `sprint-analysis` commits every cycle;
+  the obvious next step is feeding that history back into planning
+  (cycle-count estimates, model-tier selection, stall-timeout tuning)
+  instead of only recording it.
+
+## Long-term (3-12+ months)
+
+- **Hosted fleet / fleet-as-a-service on the hub-spoke foundation.** Once
+  spoke mode and dashboard RBAC exist, a managed hub is mostly an ops
+  problem, not an architecture problem. Multi-fleet federation
+  (hub-of-hubs) is the step after, and should stay speculative until at
+  least two independent hubs exist in practice.
+- **Workflows beyond software engineering.** The README already markets
+  "any domain" (retail replenishment, logistics exceptions, intake
+  triage); making that true requires the mid-term items first: a proven
+  second workflow, workflow authoring docs that outsiders can follow, and
+  an extension/distribution story for workflows that are not baked into
+  the repo.
+- **Enterprise governance: audit trail and policy.** The security
+  substrate is unusually strong already (OOB secrets, per-provider
+  permission composition, the permission-block-surfacing convention); the
+  missing enterprise piece is an immutable audit log of fleet operations
+  and secret usage, which becomes mandatory the moment a hosted hub has
+  more than one tenant.
+- **Close the self-development loop fully.** The endgame the dogfooding
+  is pointing at: the supervisor runs continuously against this repo,
+  fleet-sprint files, fixes, reviews, and ships its own bugs with the
+  human as reviewer-of-last-resort, and the calibration/KB layers make
+  each sprint measurably cheaper than the last. Everything above --
+  supervisor smoke gate, knowledge layer, cost rollups, calibration
+  feedback -- is a component of that loop.
+
+### Deliberately not on the roadmap (revisited from the previous version)
+
+Items the old roadmap carried that the evidence does not currently
+support prioritizing: gbrain integration (superseded by the
+code-intelligence abstraction), Playbooks as a separate feature (largely
+subsumed by the workflow engine), Slack notifications and a Terraform
+provider (no recent activity or demand signal in the tracker). They can
+return if demand shows up.
 
 ---
 
 ## Contributing
 
-Pick any item above (especially [*] ones), open an issue to discuss your approach, then submit a PR.
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Pick an item above, open an issue to discuss your approach, then submit a
+PR. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
   </doc>
 
   <doc title="Contributing" desc="How to contribute code, docs, and skills.">

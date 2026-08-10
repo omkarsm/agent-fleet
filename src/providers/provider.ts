@@ -1,9 +1,61 @@
+import path from 'node:path';
+import os from 'node:os';
 import type { LlmProvider } from '../types.js';
 import type { SSHExecResult } from '../types.js';
 import type { PromptErrorCategory } from '../utils/prompt-errors.js';
 import { sanitizeSessionId } from '../os/os-commands.js';
 
 export type { LlmProvider };
+
+/** The OS of the machine a resolved path will be USED on (the member's own
+ *  machine), which is NOT necessarily the OS this hub process runs on. */
+export type TargetOS = 'linux' | 'macos' | 'windows';
+
+/**
+ * apra-fleet issue #390: join path segments using the TARGET member's OS
+ * convention instead of Node's host-dependent `path.join`.
+ *
+ * Providers previously built member-side log paths with the default `path`
+ * module, so a Windows hub produced backslash-joined paths for a Linux member
+ * (and vice versa) -- a path that can never exist on the member, which silently
+ * disables stall detection (Claude/Gemini) or manufactures a false-positive
+ * stall kill (AGY/OpenCode).
+ *
+ * `targetOs === undefined` deliberately keeps the legacy host-convention
+ * behavior: that is what LOCAL members want (they run as this process's own
+ * user on this process's own OS), and it keeps every pre-existing caller
+ * byte-identical.
+ */
+export function joinForOS(targetOs: TargetOS | undefined, ...segments: string[]): string {
+  if (targetOs === 'windows') return path.win32.join(...segments);
+  if (targetOs === undefined) return path.join(...segments);
+  return path.posix.join(...segments);
+}
+
+/**
+ * apra-fleet issue #390: normalize the `homeDir` argument of
+ * resolveSessionLogPath / resolveSessionLogDir.
+ *
+ *  - `undefined` -> "caller did not say" -> fall back to this process's home
+ *    directory (correct for local members; legacy behavior for everyone else).
+ *  - `null`      -> "caller TRIED to resolve the member's home directory and
+ *    FAILED" -> there is no honest path to build, so return null and let the
+ *    provider report an unresolvable path. Callers must degrade gracefully
+ *    (no signal) rather than poll a fabricated host-home path on a remote
+ *    machine, which is what produced the false kills this fixes.
+ */
+export function resolveHomeDir(homeDir: string | null | undefined): string | null {
+  if (homeDir === null) return null;
+  return homeDir ?? os.homedir();
+}
+
+export type SessionIdStrategy =
+  | { type: 'caller-minted' }
+  | { type: 'provider-minted' };
+
+export function encodeClaudeProjectDir(workFolder: string): string {
+  return workFolder.replace(/[^a-zA-Z0-9]/g, '-');
+}
 
 /**
  * Build a `--resume <id>` flag with session ID sanitization and quoting.
@@ -36,6 +88,7 @@ export interface PromptOptions {
   tier?: 'cheap' | 'standard' | 'premium';
   maxTurns?: number;
   inv?: string;
+  agentName?: string;
 }
 
 export interface ParsedResponse {
@@ -44,6 +97,56 @@ export interface ParsedResponse {
   isError: boolean;
   raw: string;
   usage?: { input_tokens: number; output_tokens: number };
+  /** e.g. 'error_max_turns' -- the CLI result event's own subtype, when present. */
+  subtype?: string;
+  /** e.g. 'max_turns' -- the CLI result event's own terminal_reason, when present. */
+  terminalReason?: string;
+}
+
+// apra-fleet-iuc.1 / apra-fleet-ekm: single source of truth for classifying a
+// parsed response as turn-limit terminated. The claude provider normalizes
+// terminalReason to 'max_turns' when the transcript carried the signal via any
+// channel, but we also accept the raw `error_max_turns` subtype directly so
+// callers cannot regress by keying off only one field.
+export function isMaxTurnsResponse(parsed: ParsedResponse | undefined | null): boolean {
+  if (!parsed) return false;
+  return parsed.terminalReason === 'max_turns' || parsed.subtype === 'error_max_turns';
+}
+
+export interface RegisterMcpEndpointOptions {
+  /** e.g. http://<host>:<port>/mcp?member=<member-uuid> */
+  url: string;
+  /** JWT bearer token for the member's fleet MCP session. */
+  token: string;
+  workFolder: string;
+  scope: 'project' | 'user';
+}
+
+export interface RegisterMcpEndpointResult {
+  /** e.g. 'cli-verb' (Claude's `claude mcp add`) or 'config-file-merge' (AGY/OpenCode). */
+  mechanism: string;
+  /** Human-readable detail for logging/audit -- what file or command was used. */
+  detail: string;
+}
+
+/** Delivery channel for {@link ProviderAdapter.ensureWorkspaceTrusted} -- the SAME
+ *  channel compose_permissions' deliverConfigFile already uses (AgentStrategy.execCommand:
+ *  SSH for remote members, local shell exec for local members). Kept as a narrow function
+ *  type (rather than importing AgentStrategy) so providers.ts has no dependency on
+ *  services/strategy.ts. */
+export type WorkspaceTrustExecFn = (command: string, timeoutMs?: number) => Promise<SSHExecResult>;
+
+export interface EnsureWorkspaceTrustedResult {
+  /** true only when this call just wrote hasTrustDialogAccepted=true because it was
+   *  missing. false when the provider no-ops, or when trust was already present. */
+  seeded: boolean;
+  /** Human-readable detail for logging/audit (apra-fleet-eft.40.1: "log distinctly
+   *  when it SEEDS trust vs finds it already present"). */
+  detail: string;
+  /** apra-fleet-9oo: names from the project's .mcp.json that this call just ADDED to
+   *  projects[<key>].enabledMcpjsonServers (empty/absent when nothing was added).
+   *  Optional so the non-Claude no-op adapters need no change. */
+  mcpServersSeeded?: string[];
 }
 
 export interface ProviderAdapter {
@@ -66,6 +169,14 @@ export interface ProviderAdapter {
   skipPermissionsFlag(): string;
   /** Returns the CLI flag for unattended='auto', or null if the provider does not support it. */
   permissionModeAutoFlag(): string | null;
+  /** apra-fleet-eft.65.1: CLI flag that grants the dispatched agent Edit/Write
+   *  parity for its OWN work folder when running headless with no explicit
+   *  unattended mode (a headless `-p` dispatch cannot present a permission prompt,
+   *  so file edits of a brand-new file would otherwise hard-block). Scoped to
+   *  file-edit tools on the working directory -- it must NOT broaden Bash/network
+   *  permissions the way skipPermissionsFlag() does. Optional: providers that have
+   *  no such surgical flag omit it (undefined), leaving current behavior unchanged. */
+  workspaceEditPermissionFlag?(): string | null;
 
   // Response parsing
   parseResponse(result: SSHExecResult): ParsedResponse;
@@ -74,10 +185,26 @@ export interface ProviderAdapter {
   supportsResume(): boolean;
   supportsMaxTurns(): boolean;
   resumeFlag(sessionId?: string, resuming?: boolean): string;
+  /** Defines whether this provider accepts caller-minted UUIDs or generates session IDs natively. */
+  sessionIdStrategy(): SessionIdStrategy;
+  /** Resolves the session transcript log path for a given session ID, AS IT EXISTS
+   *  ON THE MEMBER'S MACHINE.
+   *  @param homeDir  The MEMBER's home directory. `undefined` falls back to this
+   *                  process's home dir (correct for local members only); `null`
+   *                  means "the member's home dir could not be resolved", and the
+   *                  provider returns '' rather than fabricating a host-home path.
+   *  @param targetOs The MEMBER's OS, used to pick the path-join convention.
+   *                  `undefined` keeps this process's host convention. */
+  resolveSessionLogPath(sessionId: string, workFolder: string, homeDir?: string | null, targetOs?: TargetOS): string;
+  /** Resolves the project/provider root log directory for watching in-flight activity.
+   *  Same `homeDir` / `targetOs` semantics as {@link resolveSessionLogPath}. Returns
+   *  null when this provider has no pollable log directory at all, or when the
+   *  member's home directory could not be resolved. */
+  resolveSessionLogDir(workFolder: string, homeDir?: string | null, targetOs?: TargetOS): string | null;
 
   // Model tier mapping
   modelTiers(): Record<'cheap' | 'standard' | 'premium', string>;
-  modelForTier(tier: 'cheap' | 'mid' | 'premium'): string;
+  modelForTier(tier: 'cheap' | 'standard' | 'premium'): string;
   modelFlag(model: string): string;
 
   // Error classification
@@ -112,6 +239,35 @@ export interface ProviderAdapter {
   /** Args for headless invocation with a safe literal prompt string.
    *  Returns e.g. `-p "LITERAL"` for Claude/Gemini/Copilot or `exec "LITERAL"` for Codex. */
   headlessInvocation(promptLiteral: string): string;
+
+  /** Register (or update) this member's apra-fleet MCP endpoint using the provider's own
+   *  native mechanism (CLI verb, e.g. Claude's `claude mcp add`; or config-file merge, e.g.
+   *  AGY/OpenCode). Optional until every provider's mechanism has been investigated and
+   *  implemented -- see docs/member-onboarding-journey.md section 3/3a.
+   *  Returns what was done, for logging/audit. */
+  registerMcpEndpoint?(opts: RegisterMcpEndpointOptions): Promise<RegisterMcpEndpointResult>;
+
+  /** Optional provider-NATIVE usage/quota read for execute_prompt budget
+   *  awareness (apra-fleet-eft.80.2). When implemented, this is the PRIMARY
+   *  source of "spent so far" for a member/workspace budget, in the requested
+   *  unit ('dollars' or 'tokens'). Providers with no headless-readable
+   *  usage/quota signal (see docs/execute-prompt-usage-api-survey.md) omit it
+   *  entirely -- budget awareness then falls back to the fleet-side estimated
+   *  accumulation (source: 'estimated'). An implementation that exists but
+   *  cannot answer at runtime (missing Admin credential, endpoint unreachable)
+   *  returns null so the same estimated fallback engages. */
+  getUsage?(opts: { agent: import('../types.js').Agent; unit: 'dollars' | 'tokens'; scope: string }): Promise<{ spent: number } | null>;
+
+  /** Idempotently ensures `workFolder` is a TRUSTED workspace so this provider honors
+   *  composed project-scoped permissions on the member (apra-fleet-eft.40 -- an unattended
+   *  member can never click a trust dialog, and its work folder is fleet-managed by
+   *  definition, so trust must be seeded programmatically). Scoped STRICTLY to exactly
+   *  `workFolder` as resolved on the member -- never a parent directory, never blanket.
+   *  `execCommand` is the delivery channel (same one compose_permissions' deliverConfigFile
+   *  uses), so this works uniformly for local and remote (SSH) members. Non-Claude
+   *  providers no-op -- see each implementation's rationale comment (apra-fleet-eft.40
+   *  provider trust matrix). Callers should log distinctly on `seeded: true` vs `false`. */
+  ensureWorkspaceTrusted(workFolder: string, execCommand: WorkspaceTrustExecFn, agentOs?: 'linux' | 'macos' | 'windows'): Promise<EnsureWorkspaceTrustedResult>;
 }
 
 

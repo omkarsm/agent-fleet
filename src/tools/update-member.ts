@@ -9,6 +9,11 @@ import { writeStatusline } from '../services/statusline.js';
 import { logLine } from '../utils/log-helpers.js';
 import type { Agent } from '../types.js';
 import { CURATED_CHEAP_MODELS, CURATED_STANDARD_MODELS, CURATED_PREMIUM_MODELS } from '../cli/config.js';
+import { validateOpenCodeModelTiers } from '../utils/opencode-model-validation.js';
+import { provisionAgents, remoteAgentsDir } from '../services/agent-provisioner.js';
+import { getStrategy } from '../services/strategy.js';
+import { seedWorkspaceTrust } from '../utils/workspace-trust.js';
+import { isFullyQualifiedPath, workFolderNotAbsoluteError } from '../utils/work-folder-validation.js';
 
 export const updateMemberSchema = z.object({
   ...memberIdentifier,
@@ -33,7 +38,7 @@ export const updateMemberSchema = z.object({
   work_folder: z.string()
     .regex(/^[^<>\n\r]+$/, 'work_folder must not contain angle brackets or newlines')
     .optional()
-    .describe('New working directory on target machine'),
+    .describe('New working directory on target machine. For non-local (remote/relay) members, must be a fully-qualified/absolute path (e.g. "/home/bella/repo" or "C:\\Users\\bella\\repo") -- "~" and relative paths are rejected, since they are never resolved for a non-local member.'),
   git_access: z.enum(['read', 'push', 'admin', 'issues', 'full']).optional().describe('Git access level for this member'),
   git_repos: z.array(z.string()).optional().describe('Git repositories this member can access (e.g. ["Apra-Labs/ApraPipes"])'),
   icon: z.string().optional().describe('Override the auto-assigned emoji icon. Use named aliases: blue-circle, green-square, red-circle, etc. (8 colors × 2 shapes: circle, square). Or pass raw emoji.'),
@@ -42,11 +47,24 @@ export const updateMemberSchema = z.object({
   cloud_profile: z.string().optional().describe('AWS CLI profile name'),
   cloud_idle_timeout_min: z.number().optional().describe('Minutes of inactivity before auto-stop'),
   cloud_activity_command: z.string().optional().describe('Custom shell command for workload detection. Must output "busy" or "idle". Pass empty string to clear.'),
-  llm_provider: z.enum(['claude', 'gemini', 'codex', 'copilot', 'agy']).optional().describe('Change the LLM provider for this member.'),
+  llm_provider: z.enum(['claude', 'gemini', 'codex', 'copilot', 'agy', 'opencode']).optional().describe('Change the LLM provider for this member.'),
   model_cheap: z.enum(CURATED_CHEAP_MODELS).optional().describe('Change custom cheap model'),
   model_standard: z.enum(CURATED_STANDARD_MODELS).optional().describe('Change custom standard model'),
   model_premium: z.enum(CURATED_PREMIUM_MODELS).optional().describe('Change custom premium model'),
-  unattended: z.union([z.literal(false), z.literal('auto'), z.literal('dangerous')]).optional().describe('Permission mode for unattended execution. false = interactive prompts; "auto" = auto-approve safe operations; "dangerous" = skip all permission checks.'),
+  model_tiers: z.object({
+    cheap: z.string().optional(),
+    standard: z.string().optional(),
+    premium: z.string().optional(),
+  }).optional().describe('Per-member model tier map with free-form model IDs (e.g. "ollama/qwen3-coder:30b"). A single model fills all tiers. At least one model required.'),
+  unattended: z.preprocess(
+    (v) => v === false ? 'false' : v,
+    z.enum(['false', 'auto', 'dangerous'])
+  ).optional().describe('Permission mode for unattended execution. Pass "false" to reset to interactive prompts; "auto" = auto-approve safe operations; "dangerous" = skip all permission checks.'),
+  category: z.string().max(64).optional().describe('Group label for this member (e.g. "doers", "reviewers"). Pass empty string to clear.'),
+  tags: z.array(z.string().max(64, 'Each tag must be 64 characters or fewer'))
+    .max(10, 'At most 10 tags are allowed')
+    .optional()
+    .describe('Free-form labels for this member (max 10 tags, each max 64 chars). Empty array clears all tags; non-empty array replaces existing tags.'),
 });
 
 export type UpdateMemberInput = z.infer<typeof updateMemberSchema>;
@@ -62,6 +80,17 @@ export async function updateMember(input: UpdateMemberInput): Promise<string> {
   const hostChanged = input.host !== undefined && input.host !== existing.host;
   const portChanged = input.port !== undefined && input.port !== existing.port;
   const folderChanged = input.work_folder !== undefined && input.work_folder !== existing.workFolder;
+
+  // SF-17/SF-21: same fully-qualified requirement as register_member -- a
+  // non-local member's work_folder is never tilde-resolved or made absolute
+  // at runtime, so an update must not be able to introduce the state
+  // registration rejects. Guard on `!== 'local'` -- not `=== 'remote'` -- a relay
+  // member is not local either, and register_member cannot create one
+  // directly, so update_member is the only path that can set its work_folder
+  // -- missing it here would silently reopen exactly the bug this closes.
+  if (existing.agentType !== 'local' && input.work_folder !== undefined && !isFullyQualifiedPath(input.work_folder)) {
+    return workFolderNotAbsoluteError(input.work_folder, 'Member was NOT updated.');
+  }
 
   const needsUniquenessCheck = existing.agentType === 'remote'
     ? (hostChanged || portChanged || folderChanged)
@@ -120,13 +149,46 @@ export async function updateMember(input: UpdateMemberInput): Promise<string> {
   const updates: Record<string, unknown> = {};
   const warnings: string[] = [];
 
+  // --- model_tiers normalization ---
+  if (input.model_tiers !== undefined) {
+    const values = Object.values(input.model_tiers).filter(Boolean) as string[];
+    if (values.length === 0) {
+      return '[-] model_tiers was provided but contains no models. Supply at least one model. Member was NOT updated.';
+    }
+    let normalizedModelTiers: { cheap?: string; standard?: string; premium?: string };
+    if (values.length === 1) {
+      normalizedModelTiers = { cheap: values[0], standard: values[0], premium: values[0] };
+    } else {
+      normalizedModelTiers = { ...input.model_tiers };
+      const fallback = input.model_tiers.standard ?? input.model_tiers.cheap ?? values[0];
+      if (!normalizedModelTiers.cheap) normalizedModelTiers.cheap = fallback;
+      if (!normalizedModelTiers.standard) normalizedModelTiers.standard = fallback;
+      if (!normalizedModelTiers.premium) normalizedModelTiers.premium = normalizedModelTiers.standard;
+    }
+    updates.modelTiers = normalizedModelTiers;
+
+    // --- Validate opencode model_tiers against available models ---
+    if (updates.modelTiers) {
+      const effectiveProvider = (input.llm_provider ?? existing.llmProvider ?? 'claude');
+      if (effectiveProvider === 'opencode') {
+        const { warnings: tierWarnings } = await validateOpenCodeModelTiers(
+          existing,
+          updates.modelTiers as { cheap?: string; standard?: string; premium?: string },
+        );
+        warnings.push(...tierWarnings);
+      }
+    }
+  }
+
   if (resolvedIcon) updates.icon = resolvedIcon;
   if (input.friendly_name) updates.friendlyName = input.friendly_name;
   if (input.llm_provider !== undefined) updates.llmProvider = input.llm_provider;
+  if (input.category !== undefined) updates.category = input.category.trim() || undefined;
+  if (input.tags !== undefined) updates.tags = input.tags.length === 0 ? undefined : input.tags;
   if (input.model_cheap !== undefined) updates.modelCheap = input.model_cheap;
   if (input.model_standard !== undefined) updates.modelStandard = input.model_standard;
   if (input.model_premium !== undefined) updates.modelPremium = input.model_premium;
-  if (input.unattended !== undefined) updates.unattended = input.unattended;
+  if (input.unattended !== undefined) updates.unattended = input.unattended === 'false' ? false : input.unattended;
   if (input.host) updates.host = input.host;
   if (input.port) updates.port = input.port;
   if (input.username) updates.username = input.username;
@@ -167,6 +229,32 @@ export async function updateMember(input: UpdateMemberInput): Promise<string> {
   logLine('update_member', `id=${updated.id} name=${updated.friendlyName}`, updated);
   writeStatusline();
 
+  // --- Re-provision role-agent files for remote members ---
+  // Cheap (one probe round trip when up to date); also doubles as the manual retry
+  // path when a prior registration/update left agent files stale or unprovisioned.
+  // Does NOT start a stopped cloud member -- testConnection() failure just skips.
+  // Short-circuits before the connectivity check for providers with no agents dir
+  // (codex, copilot) -- no point spending a real SSH round trip just to skip.
+  let agentProvisionResult: { pushed: string[]; skippedReason?: string; warning?: string } | undefined;
+  if (updated.agentType === 'remote' && remoteAgentsDir(updated.llmProvider ?? 'claude') !== null) {
+    const strategy = getStrategy(updated);
+    const conn = await strategy.testConnection();
+    if (!conn.ok) {
+      warnings.push(`Could not reach member -- agent files not re-provisioned: ${conn.error ?? 'connection failed'}`);
+    } else {
+      agentProvisionResult = await provisionAgents(updated);
+      if (agentProvisionResult.warning) warnings.push(agentProvisionResult.warning);
+
+      // apra-fleet-eft.40.2: seed Claude workspace trust now that we know the member
+      // is reachable (reuses the same connectivity check -- no extra round trip
+      // when unreachable). Best-effort/non-fatal; non-Claude providers no-op.
+      await seedWorkspaceTrust(updated, strategy, 'update_member');
+    }
+  } else if (updated.agentType !== 'remote') {
+    // Local members have no connectivity concept -- always attempt (best-effort/non-fatal).
+    await seedWorkspaceTrust(updated, undefined, 'update_member');
+  }
+
   let result = `✅ Member "${updated.friendlyName}" updated.\n\n`;
   result += `  Icon:    ${updated.icon ?? DEFAULT_ICON}\n`;
   result += `  ID:      ${updated.id}\n`;
@@ -183,6 +271,19 @@ export async function updateMember(input: UpdateMemberInput): Promise<string> {
   if (updated.modelCheap) result += `  Model Cheap: ${updated.modelCheap}\n`;
   if (updated.modelStandard) result += `  Model Standard: ${updated.modelStandard}\n`;
   if (updated.modelPremium) result += `  Model Premium: ${updated.modelPremium}\n`;
+  if (agentProvisionResult) {
+    if (agentProvisionResult.skippedReason) {
+      result += `  Agents:  skipped (${agentProvisionResult.skippedReason})\n`;
+    } else if (agentProvisionResult.pushed.length > 0) {
+      result += `  Agents:  ${agentProvisionResult.pushed.length} file(s) provisioned\n`;
+    } else {
+      result += `  Agents:  up to date\n`;
+    }
+  }
+  if (updated.modelTiers) {
+    const mt = updated.modelTiers;
+    result += `  Model Tiers: cheap=${mt.cheap ?? '-'} standard=${mt.standard ?? '-'} premium=${mt.premium ?? '-'}\n`;
+  }
 
   if (warnings.length > 0) {
     result += '\n';

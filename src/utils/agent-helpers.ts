@@ -27,10 +27,13 @@ export function getAgentOS(agent: Agent): RemoteOS {
 
 /**
  * Format a host label for display.
- * Local agents show "(local)", remote agents show "host:port".
+ * Local agents show "(local)", relay agents show "(relay)", remote agents
+ * show "host:port".
  */
 export function formatAgentHost(agent: Agent): string {
-  return agent.agentType === 'local' ? '(local)' : `${agent.host}:${agent.port}`;
+  if (agent.agentType === 'local') return '(local)';
+  if (agent.agentType === 'relay') return '(relay)';
+  return `${agent.host}:${agent.port}`;
 }
 
 // T7: idle manager hook — registered by IdleManager.start() via setIdleTouchHook().
@@ -84,6 +87,28 @@ export function setStoredPid(agentId: string, pid: number): void {
 /** Remove the stored PID for an agent (called after kill or successful completion). */
 export function clearStoredPid(agentId: string): void {
   _activePids.delete(agentId);
+}
+
+/**
+ * Group items by category key, returning a map and alphabetically sorted keys
+ * with `(uncategorized)` always last.
+ */
+export function groupByCategory<T>(
+  items: T[],
+  getCategory: (item: T) => string | null | undefined,
+): { grouped: Map<string, T[]>; sortedKeys: string[] } {
+  const grouped = new Map<string, T[]>();
+  for (const item of items) {
+    const key = getCategory(item) || '(uncategorized)';
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(item);
+  }
+  const sortedKeys = [...grouped.keys()].sort((a, b) => {
+    if (a === '(uncategorized)') return 1;
+    if (b === '(uncategorized)') return -1;
+    return a.localeCompare(b);
+  });
+  return { grouped, sortedKeys };
 }
 
 /**

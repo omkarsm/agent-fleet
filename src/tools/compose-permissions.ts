@@ -9,11 +9,13 @@ const __dirname = dirname(__filename);
 import { getStrategy } from '../services/strategy.js';
 import { memberIdentifier, resolveMember } from '../utils/resolve-member.js';
 import { getProvider } from '../providers/index.js';
+import { seedWorkspaceTrust } from '../utils/workspace-trust.js';
 import type { Agent } from '../types.js';
 
 export const composePermissionsSchema = z.object({
   ...memberIdentifier,
-  role: z.enum(['doer', 'reviewer']).describe('Role determines base profile (doer = broad build/test, reviewer = read + feedback + test)'),
+  role: z.enum(['doer', 'reviewer']).optional().describe('Role determines base profile (doer = broad build/test, reviewer = read + feedback + test). Provide at least one of role or tags.'),
+  tags: z.array(z.string()).optional().describe('Member tags. Include "doer" or "reviewer" to set the primary mode (default doer); other tags (e.g. "gpu", "devops") load tag-<name>.json profiles and merge additively. When both role and tags are given, tags wins.'),
   project_folder: z.string().optional().describe('Local project folder containing permissions.json ledger. Omit to skip ledger merge.'),
   grant: z.array(z.string()).optional().describe('Reactive mode: additional permissions to grant (e.g. ["Bash(docker:*)", "Bash(docker-compose:*)"]). Appended to current permissions and re-delivered.'),
   grant_reason: z.string().optional().describe('Reason for the grant (stored in ledger)'),
@@ -137,8 +139,83 @@ function compose(profilesDir: string, role: string, stacks: string[], ledger: Le
   return [...perms];
 }
 
+/** Determine the primary permission mode from tags and/or role.
+ *  Precedence: first of 'doer'/'reviewer' appearing in tags wins (tags beats role);
+ *  otherwise fall back to role; default to 'doer'. */
+function resolvePrimaryMode(role: string | undefined, tags: string[] | undefined): 'doer' | 'reviewer' {
+  if (tags?.length) {
+    for (const tag of tags) {
+      if (tag === 'doer' || tag === 'reviewer') return tag;
+    }
+  }
+  if (role === 'doer' || role === 'reviewer') return role;
+  return 'doer';
+}
+
+/** Tag-aware composition. Loads the base profile for the primary mode, merges stack
+ *  profiles keyed by mode, then merges tag-<name>.json for every non-mode tag, plus
+ *  ledger grants. Additive (Set-based) merge -- order-independent, deduplicated. */
+function composeFromTags(profilesDir: string, mode: 'doer' | 'reviewer', tags: string[], stacks: string[], ledger: Ledger): string[] {
+  const baseName = mode === 'doer' ? 'base-dev' : 'base-reviewer';
+  const base = loadProfile(profilesDir, baseName);
+  const perms = new Set<string>(base?.permissions?.allow ?? []);
+
+  const profileKey = mode === 'doer' ? 'dev' : 'reviewer';
+
+  // Stack profiles (detected from the project), keyed by mode
+  for (const stack of stacks) {
+    const profile = loadProfile(profilesDir, stack);
+    if (profile?.[profileKey]) {
+      for (const p of profile[profileKey]) perms.add(p);
+    }
+  }
+
+  // Custom tag profiles: tag-<name>.json for each non-mode tag. Unknown tags
+  // (no matching profile file) are silently ignored.
+  for (const tag of tags) {
+    if (tag === 'doer' || tag === 'reviewer') continue;
+    const profile = loadProfile(profilesDir, `tag-${tag}`);
+    if (profile?.[profileKey]) {
+      for (const p of profile[profileKey]) perms.add(p);
+    }
+  }
+
+  // Merge ledger grants
+  for (const entry of ledger.granted) {
+    perms.add(entry.permission);
+  }
+
+  return [...perms];
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Recursively merges `source` into `target`: nested plain objects merge key
+ *  by key (union of both sides); everything else (arrays, scalars) from
+ *  `source` overwrites the same key in `target`. This is what lets
+ *  compose_permissions rewrite `permissions`/`mcpServers.apra-fleet` while
+ *  preserving unrelated entries register_member already wrote to the same
+ *  file (e.g. `mcpServers['apra-fleet-member']`, which carries the member's
+ *  live JWT and was previously destroyed by a wholesale overwrite). */
+export function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...target };
+  for (const [key, value] of Object.entries(source)) {
+    if (isPlainObject(value) && isPlainObject(result[key])) {
+      result[key] = deepMerge(result[key] as Record<string, unknown>, value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 /** Deliver a single config file to the member.
- *  Creates parent directory and writes the content (JSON object or TOML string). */
+ *  Creates parent directory and writes the content (JSON object or TOML string).
+ *  JSON object content is deep-merged into whatever the file already
+ *  contains remotely, rather than overwriting it wholesale -- other tools
+ *  (e.g. register_member's mcpServers entry) may share the same file. */
 async function deliverConfigFile(
   strategy: Awaited<ReturnType<typeof getStrategy>>,
   agentOs: string,
@@ -151,9 +228,25 @@ async function deliverConfigFile(
     : `mkdir -p ${dir}`;
   await strategy.execCommand(mkdirCmd, 5000);
 
-  const contentStr = typeof content === 'string'
-    ? content
-    : JSON.stringify(content, null, 2);
+  let mergedContent: Record<string, unknown> | string = content;
+  if (isPlainObject(content)) {
+    const readCmd = agentOs === 'windows'
+      ? `Get-Content -Raw "${filePath.replace(/\//g, '\\')}" -ErrorAction SilentlyContinue`
+      : `cat ${filePath} 2>/dev/null || true`;
+    const readResult = await strategy.execCommand(readCmd, 5000);
+    let existing: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(readResult.stdout.trim());
+      if (isPlainObject(parsed)) existing = parsed;
+    } catch {
+      // file missing, empty, or not JSON -- start from an empty object
+    }
+    mergedContent = deepMerge(existing, content);
+  }
+
+  const contentStr = typeof mergedContent === 'string'
+    ? mergedContent
+    : JSON.stringify(mergedContent, null, 2);
 
   const writeCmd = agentOs === 'windows'
     ? `[System.IO.File]::WriteAllText("${filePath.replace(/\//g, '\\')}", '${contentStr.replace(/'/g, "''")}', (New-Object System.Text.UTF8Encoding($false)))`
@@ -165,6 +258,14 @@ export async function composePermissions(input: ComposePermissionsInput): Promis
   const agentOrError = resolveMember(input.member_id, input.member_name);
   if (typeof agentOrError === 'string') return agentOrError;
   const agent = agentOrError as Agent;
+
+  if (!input.role && !(input.tags && input.tags.length)) {
+    return 'Provide at least one of role or tags to compose permissions.';
+  }
+
+  // Primary mode drives the base profile and the provider config. When both role
+  // and tags are supplied, tags win (a doer/reviewer tag overrides role).
+  const mode = resolvePrimaryMode(input.role, input.tags);
 
   const provider = getProvider(agent.llmProvider);
   const strategy = getStrategy(agent);
@@ -203,7 +304,7 @@ export async function composePermissions(input: ComposePermissionsInput): Promis
       allow = [...expanded];
     }
 
-    const configs = provider.composePermissionConfig(input.role, allow);
+    const configs = provider.composePermissionConfig(mode, allow);
     const paths = provider.permissionConfigPaths();
     for (let i = 0; i < paths.length; i++) {
       await deliverConfigFile(strategy, agent.os ?? 'linux', paths[i], configs[i]);
@@ -221,6 +322,11 @@ export async function composePermissions(input: ComposePermissionsInput): Promis
       saveLedger(input.project_folder, ledger);
     }
 
+    // apra-fleet-eft.40.2: self-healing -- repair workspace trust on EVERY
+    // compose_permissions run (a member registered before this fix, or one whose
+    // trust was never seeded, gets fixed the next time permissions are composed).
+    await seedWorkspaceTrust(agent, strategy, 'compose_permissions');
+
     return `✅ Granted ${[...expanded].length} permissions on "${agent.friendlyName}" (${provider.name}):\n  ${[...expanded].join('\n  ')}`;
   }
 
@@ -234,13 +340,22 @@ export async function composePermissions(input: ComposePermissionsInput): Promis
     saveLedger(input.project_folder, ledger);
   }
 
-  const allow = compose(profilesDir, input.role, stacks, ledger);
-  const configs = provider.composePermissionConfig(input.role, allow);
+  const allow = input.tags?.length
+    ? composeFromTags(profilesDir, mode, input.tags, stacks, ledger)
+    : compose(profilesDir, mode, stacks, ledger);
+  const configs = provider.composePermissionConfig(mode, allow);
   const paths = provider.permissionConfigPaths();
 
   for (let i = 0; i < paths.length; i++) {
     await deliverConfigFile(strategy, agent.os ?? 'linux', paths[i], configs[i]);
   }
 
-  return `✅ Permissions composed for "${agent.friendlyName}" (${input.role}, ${provider.name}):\n  Stacks: ${stacks.join(', ') || 'none detected'}\n  Config: ${paths.join(', ')}\n  Ledger grants: ${ledger.granted.length}`;
+  // apra-fleet-eft.40.2: self-healing -- repair workspace trust on EVERY
+  // compose_permissions run (a member registered before this fix, or one whose
+  // trust was never seeded, gets fixed the next time permissions are composed).
+  await seedWorkspaceTrust(agent, strategy, 'compose_permissions');
+
+  const customTags = (input.tags ?? []).filter(t => t !== 'doer' && t !== 'reviewer');
+  const tagsLine = customTags.length ? `\n  Tags: ${customTags.join(', ')}` : '';
+  return `✅ Permissions composed for "${agent.friendlyName}" (${mode}, ${provider.name}):\n  Stacks: ${stacks.join(', ') || 'none detected'}${tagsLine}\n  Config: ${paths.join(', ')}\n  Ledger grants: ${ledger.granted.length}`;
 }

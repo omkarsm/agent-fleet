@@ -11,7 +11,8 @@ import { generateTaskWrapper } from '../services/cloud/task-wrapper.js';
 import { escapeShellArg, escapePowerShellArg } from '../utils/shell-escape.js';
 import { credentialResolve, registerTaskCredentials } from '../services/credential-store.js';
 import { collectOobConfirm } from '../services/auth-socket.js';
-import { LogScope, maskSecrets, truncateForLog } from '../utils/log-helpers.js';
+import { LogScope, maskSecrets, truncateForLog, logLine } from '../utils/log-helpers.js';
+import { getLogPreviewChars } from '../services/user-config.js';
 import { tryKillPid } from '../utils/pid-helpers.js';
 import type { Agent } from '../types.js';
 
@@ -39,6 +40,16 @@ const NETWORK_TOOL_RE = /\b(curl|wget|ssh|sftp|scp|rsync|nc|netcat|http|fetch|In
 
 // Matches raw sec:// credential handles that must never reach shell or LLM
 const SEC_RE = /sec:\/\/[a-zA-Z0-9_]+/;
+
+/** Cap command output before logging it, to protect the fleet log from huge dumps. */
+function capForLog(text: string, maxLines = 50, maxChars = 4000): string {
+  let t = text.length > maxChars ? text.slice(0, maxChars) + '\n... [output truncated]' : text;
+  const lines = t.split('\n');
+  if (lines.length > maxLines) {
+    t = lines.slice(0, maxLines).join('\n') + `\n... [+${lines.length - maxLines} more lines]`;
+  }
+  return t;
+}
 
 interface ResolvedCredential {
   name: string;
@@ -111,7 +122,19 @@ function redactOutput(output: string, credentials: ResolvedCredential[]): string
   return redacted;
 }
 
-export async function executeCommand(input: ExecuteCommandInput, extra?: any): Promise<string> {
+export interface ExecuteCommandStructured {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  [key: string]: unknown;
+}
+
+export interface ExecuteCommandResult {
+  text: string;
+  structuredContent?: ExecuteCommandStructured;
+}
+
+export async function executeCommand(input: ExecuteCommandInput, extra?: any): Promise<string | ExecuteCommandResult> {
   const agentOrError = resolveMember(input.member_id, input.member_name);
   if (typeof agentOrError === 'string') return agentOrError;
   let agent: Agent;
@@ -122,7 +145,7 @@ export async function executeCommand(input: ExecuteCommandInput, extra?: any): P
   }
 
   const strategy = getStrategy(agent);
-    const scope = new LogScope('execute_command', `${truncateForLog(maskSecrets(input.command))}`, agent);
+    const scope = new LogScope('execute_command', truncateForLog(maskSecrets(input.command), getLogPreviewChars()), agent);
     const onPidCaptured = (pid: number) => scope.info(`pid=${pid}`);
 
   const cmds = getOsCommands(getAgentOS(agent));
@@ -231,7 +254,12 @@ export async function executeCommand(input: ExecuteCommandInput, extra?: any): P
 
   // -- Regular (synchronous) command path --
   const authPrefix = buildAuthEnvPrefix(agent, getAgentOS(agent));
-  const wrapped = authPrefix + cmds.wrapInWorkFolder(folder, resolvedCommand);
+  // wrapPidCapture lets a timed-out ssh.ts/strategy.ts execCommand recover a
+  // PID to tree-kill (apra-fleet-kwx precedent) -- without it, a command with
+  // no PID protocol of its own (unlike a provider launch) leaves the remote
+  // process running forever past the timeout, since ssh has no local child
+  // handle to fall back on the way LocalStrategy does.
+  const wrapped = authPrefix + cmds.wrapPidCapture(cmds.wrapInWorkFolder(folder, resolvedCommand));
 
   // Mark agent as busy in statusline
   writeStatusline(new Map([[agent.id, 'busy']]));
@@ -245,17 +273,36 @@ export async function executeCommand(input: ExecuteCommandInput, extra?: any): P
     if (result.stderr) parts.push(`[stderr]\n${result.stderr}`);
     const rawOutput = parts.join('\n') || '(no output)';
 
-    // Redact credential values from output
+    // Redact credential values from output. Structured stdout/stderr are
+    // redacted independently (not just the combined display text) so a
+    // programmatic caller reading structuredContent never sees a secret that
+    // the text channel would have masked.
     const output = credentials.length > 0 ? redactOutput(rawOutput, credentials) : rawOutput;
+    const redactedStdout = credentials.length > 0 ? redactOutput(result.stdout ?? '', credentials) : (result.stdout ?? '');
+    const redactedStderr = credentials.length > 0 ? redactOutput(result.stderr ?? '', credentials) : (result.stderr ?? '');
 
     writeStatusline();
+
+    // Log command output under a dedicated tag so `watch` can surface it (the
+    // fleet log is watch's source; short-command stdout is otherwise not
+    // persisted anywhere). Capped to protect the log from huge outputs.
+    if (output && output !== '(no output)') {
+      logLine('command_output', capForLog(output), agent, scope.getInv());
+    }
 
     if (result.code !== 0) scope.fail(`exit=${result.code}`);
     else scope.ok(`exit=0`);
 
-    return result.code === 0
-      ? `Exit code: 0\n${output}`
-      : `Exit code: ${result.code}\n${output}`;
+    // The `Exit code: N\n<output>` text stays for human/LLM-facing display
+    // (agents that dispatch execute_command conversationally read this
+    // directly, per the fleet skill's dispatch rules) -- structuredContent is
+    // an ADDITIVE machine-readable channel alongside it, not a replacement.
+    // Programmatic callers (e.g. FleetWorkflow.command()) should prefer
+    // structuredContent.stdout over scraping/stripping the text prefix.
+    return {
+      text: result.code === 0 ? `Exit code: 0\n${output}` : `Exit code: ${result.code}\n${output}`,
+      structuredContent: { exitCode: result.code, stdout: redactedStdout, stderr: redactedStderr },
+    };
   } catch (err: any) {
     writeStatusline(new Map([[agent.id, 'offline']]));
     scope.abort(err.message);

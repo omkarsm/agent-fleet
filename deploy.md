@@ -1,63 +1,84 @@
 # Fleet Deploy Runbook
-IMP: Must be run using model tier `cheap`
-## Prerequisites
-- `gh` CLI authenticated with access to Apra-Labs/apra-fleet
-- Fleet MCP server accessible (via `/mcp` in Claude Code)
 
-## Steps
+## Permissions
 
-### 1. Identify the build
+Commands below require these prefixes in `.claude/settings.json` under `permissions.allow`:
+- `Bash(*apra-fleet-installer-* install *)`
+- `Bash(*apra-fleet* --version)`
+- `Bash(*apra-fleet* start)`
+- `Bash(node scripts/preflight-clear-build-locks.mjs)` -- pre-`npm ci` stale
+  build-tool lock cleanup, see Deploy below
+- `Bash(npm ci)`
+- `Bash(npm run build)`
+- `Bash(npm run build:binary)`
+- `Bash(dist/apra-fleet-installer-* install *)`
+- `Bash(curl * localhost:8787/api/sprints*)` -- for the pre-`install --force`
+  active-sprints check below. Port 8787 is the supervisor's own API; the
+  singleton MCP server `install --force` restarts is a separate process on
+  7523, not what you're querying here.
+
+## Deploy
+
+Builds from source and installs locally using installer binary is found inside ./dist folder with install --force arguments
+
+**Caution: `install --force` stops the running fleet server first.** This is
+the shared singleton MCP server (`localhost:7523`) that every live supervisor
+sprint's dispatches depend on, not just your own MCP connection. If a
+supervisor is running sprints when you deploy, the restart can collaterally
+kill their child processes. Before deploying onto a machine running the
+supervisor, check `GET /api/sprints` for active sprints; if any are running,
+either wait for them to finish or be ready to force-release their stale
+reservations and relaunch afterward.
+
 ```bash
-# Latest CI run on a branch
-gh run list --repo Apra-Labs/apra-fleet --branch <branch> --limit 1
+# Ownership-scoped pre-flight: kills any process still holding a lock on a
+# file under THIS repo's node_modules (e.g. an orphaned esbuild.exe from a
+# prior crashed/killed build) so `npm ci` doesn't fail with EPERM/unlink.
+# Never name-based -- only kills processes whose own executable path/cmdline
+# points inside this exact checkout's node_modules, so it cannot collide
+# with an unrelated project's same-named process.
+node scripts/preflight-clear-build-locks.mjs
 
-# Or from a release tag
-gh release list --repo Apra-Labs/apra-fleet --limit 5
+npm ci
+npm run build
+npm run build:binary
+
+# Active-sprints check (see Caution above): if this returns a non-empty
+# "sprints" array, STOP -- wait for them to finish, or be ready to
+# force-release their stale reservations and relaunch afterward.
+curl -s http://localhost:8787/api/sprints
+
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+case "$OS" in
+  Darwin) PLATFORM=darwin ;;
+  Linux)  PLATFORM=linux ;;
+  *)      PLATFORM=win ;;
+esac
+case "$ARCH" in
+  x86_64) SEA_ARCH=x64 ;;
+  arm64|aarch64) SEA_ARCH=arm64 ;;
+  *) SEA_ARCH="$ARCH" ;;
+esac
+
+INSTALLER="dist/apra-fleet-installer-${PLATFORM}-${SEA_ARCH}"
+[ "$PLATFORM" = "win" ] && INSTALLER="${INSTALLER}.exe"
+
+"$INSTALLER" install --force
+"$HOME/.apra-fleet/bin/apra-fleet" start || "$HOME/.apra-fleet/bin/apra-fleet.exe" start
 ```
 
-### 2. Download the binary
+## Smoke test
+
 ```bash
-mkdir -p /tmp/fleet-deploy
-
-# From CI artifact (branch build) — gh run download creates a subdirectory per artifact
-gh run download <run-id> --repo Apra-Labs/apra-fleet --dir /tmp/fleet-deploy
-
-# Or from release (downloads the file directly, no subdirectory)
-gh release download <tag> --repo Apra-Labs/apra-fleet -p "apra-fleet-installer-win-x64.exe" -D /tmp/fleet-deploy
+"$HOME/.apra-fleet/bin/apra-fleet" --version || "$HOME/.apra-fleet/bin/apra-fleet.exe" --version
 ```
-
-### 3. Install
-```bash
-# CI artifact: file is inside a subdirectory named after the artifact
-/tmp/fleet-deploy/apra-fleet-installer-win-x64.exe/apra-fleet-installer-win-x64.exe install --force
-
-# Release download: file is directly in the target dir
-/tmp/fleet-deploy/apra-fleet-installer-win-x64.exe install --force
-```
-This handles shutdown, binary replacement, skill installation, and restart in one step.
-
-### 4. Verify
-```bash
-~/.apra-fleet/bin/apra-fleet.exe --version
-```
-In Claude Code: run `/mcp` to reconnect, then use `fleet_status` to confirm all members are online.
+Exit 0 = healthy. Call `version` (`mcp__apra-fleet__version` in Claude Code) and
+confirm it matches the version/commit just built, then call `fleet_status` to
+check online members. If `version` doesn't match, reconnect your MCP client
+(`/mcp` in Claude Code, or restart your provider CLI) and retry.
 
 ## Rollback
-The installer does not create a backup — to rollback, download the previous release and re-run the installer with `--force`:
 
-```bash
-# Download previous version (replace <tag> with the version to roll back to, e.g. v0.1.8.1)
-gh release download <tag> --repo Apra-Labs/apra-fleet -p "apra-fleet-installer-win-x64.exe" -D /tmp/fleet-rollback
-
-# Re-install
-/tmp/fleet-rollback/apra-fleet-installer-win-x64.exe install --force
-```
-
-After rollback, run `/mcp` in Claude Code to reconnect, then `fleet_status` to verify members are online.
-
-## Platform binaries
-| Platform | Artifact name |
-|----------|--------------|
-| Windows x64 | `apra-fleet-installer-win-x64.exe` |
-| Linux x64 | `apra-fleet-installer-linux-x64` |
-| macOS ARM | `apra-fleet-installer-darwin-arm64` |
+No automated rollback. Check out the previous commit and re-run `## Deploy`
+above.

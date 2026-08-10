@@ -11,13 +11,23 @@ export const HOOKS_DIR = path.join(FLEET_BASE, 'hooks');
 export const SCRIPTS_DIR = path.join(FLEET_BASE, 'scripts');
 export const DATA_DIR = path.join(FLEET_BASE, 'data');
 export const INSTALL_CONFIG_PATH = path.join(DATA_DIR, 'install-config.json');
+// Workflow subsystem (apra-fleet workflow <name>) -- see
+// docs/workflow-subsystem-plan.md Section 2.1 for the on-disk layout.
+export const NODE_MODULES_DIR = path.join(FLEET_BASE, 'node_modules');
+export const SCHEMAS_DIR = path.join(FLEET_BASE, 'schemas');
+export const WORKFLOWS_DIR = path.join(FLEET_BASE, 'workflows');
 
+// Claude entries use the bare family aliases (haiku/sonnet/opus) instead of
+// dated model IDs -- the claude CLI/settings.json resolve these to the
+// current generation automatically, so they never go stale as Anthropic
+// ships new models. Other providers' CLIs don't share this alias support,
+// so their entries stay pinned to literal model IDs.
 export const CURATED_CHEAP_MODELS = [
   'gpt-oss-120b',
   'gpt-120',
   'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite-preview',
-  'claude-haiku-4-5',
+  'haiku',
   'gpt-5.4-mini',
 ] as const;
 
@@ -25,27 +35,25 @@ export const CURATED_STANDARD_MODELS = [
   'gemini-3.5-flash',
   'gpt-oss-120b',
   'gpt-120',
-  'claude-sonnet-4.6',
-  'claude-sonnet-4-5',
+  'sonnet',
   'gemini-3-flash-preview',
   'gpt-5.4',
 ] as const;
 
 export const CURATED_PREMIUM_MODELS = [
-  'claude-sonnet-4.6',
-  'claude-opus-4.6',
-  'claude-opus-4-6',
-  'claude-opus-4-7',
+  'sonnet',
+  'opus',
   'gpt-oss-120b',
   'gemini-3.1-pro-preview',
 ] as const;
 
 export const PROVIDER_STANDARD_MODELS: Record<string, string> = {
-  claude: 'claude-sonnet-4-6',
+  claude: 'sonnet',
   gemini: 'gemini-3.5-flash',
   codex: 'gpt-5.4',
   copilot: 'claude-sonnet-4-5',
   agy: 'gemini-3.5-flash',
+  opencode: 'ollama/qwen3-coder:30b',
 };
 
 export interface ProviderInstallConfig {
@@ -53,12 +61,16 @@ export interface ProviderInstallConfig {
   settingsFile: string;
   skillsDir: string;
   fleetSkillsDir: string;
+  agentsDir: string | undefined;
   name: string;
 }
 
 export interface MultiProviderInstallConfig {
   providers: Record<string, {
     skill: 'none' | 'all' | 'fleet' | 'pm';
+    // Optional for backward compatibility -- older install-config.json files
+    // (written before the workflow subsystem existed) won't have this field.
+    workflowsMode?: 'all' | 'none';
     installedAt: string;
   }>;
 }
@@ -71,6 +83,7 @@ export function getProviderInstallConfig(provider: LlmProvider): ProviderInstall
         settingsFile: path.join(home, '.gemini', 'antigravity-cli', 'settings.json'),
         skillsDir: path.join(home, '.gemini', 'antigravity-cli', 'skills', 'pm'),
         fleetSkillsDir: path.join(home, '.gemini', 'antigravity-cli', 'skills', 'fleet'),
+        agentsDir: path.join(home, '.gemini', 'antigravity-cli', 'agents'),
         name: 'Antigravity',
       };
     case 'gemini':
@@ -79,6 +92,7 @@ export function getProviderInstallConfig(provider: LlmProvider): ProviderInstall
         settingsFile: path.join(home, '.gemini', 'settings.json'),
         skillsDir: path.join(home, '.gemini', 'skills', 'pm'),
         fleetSkillsDir: path.join(home, '.gemini', 'skills', 'fleet'),
+        agentsDir: path.join(home, '.gemini', 'agents'),
         name: 'Gemini',
       };
     case 'codex':
@@ -87,6 +101,7 @@ export function getProviderInstallConfig(provider: LlmProvider): ProviderInstall
         settingsFile: path.join(home, '.codex', 'config.toml'),
         skillsDir: path.join(home, '.codex', 'skills', 'pm'),
         fleetSkillsDir: path.join(home, '.codex', 'skills', 'fleet'),
+        agentsDir: undefined,
         name: 'Codex',
       };
     case 'copilot':
@@ -95,7 +110,17 @@ export function getProviderInstallConfig(provider: LlmProvider): ProviderInstall
         settingsFile: path.join(home, '.copilot', 'settings.json'),
         skillsDir: path.join(home, '.copilot', 'skills', 'pm'),
         fleetSkillsDir: path.join(home, '.copilot', 'skills', 'fleet'),
+        agentsDir: undefined,
         name: 'Copilot',
+      };
+    case 'opencode':
+      return {
+        configDir: path.join(home, '.config', 'opencode'),
+        settingsFile: path.join(home, '.config', 'opencode', 'opencode.json'),
+        skillsDir: path.join(home, '.config', 'opencode', 'skills', 'pm'),
+        fleetSkillsDir: path.join(home, '.config', 'opencode', 'skills', 'fleet'),
+        agentsDir: path.join(home, '.config', 'opencode', 'agents'),
+        name: 'OpenCode',
       };
     case 'claude':
     default:
@@ -104,9 +129,21 @@ export function getProviderInstallConfig(provider: LlmProvider): ProviderInstall
         settingsFile: path.join(home, '.claude', 'settings.json'),
         skillsDir: path.join(home, '.claude', 'skills', 'pm'),
         fleetSkillsDir: path.join(home, '.claude', 'skills', 'fleet'),
+        agentsDir: path.join(home, '.claude', 'agents'),
         name: 'Claude',
       };
   }
+}
+
+/**
+ * Home-relative agents dir for a provider (e.g. '.claude/agents'), or undefined
+ * when the provider has no agents dir (codex, copilot). Derived from
+ * getProviderInstallConfig() so install and remote provisioning cannot drift.
+ */
+export function getAgentsDirRelative(provider: LlmProvider): string | undefined {
+  const paths = getProviderInstallConfig(provider);
+  if (!paths.agentsDir) return undefined;
+  return path.relative(home, paths.agentsDir).replace(/\\/g, '/');
 }
 
 export function readConfig(paths: ProviderInstallConfig): any {
@@ -166,10 +203,15 @@ export function readInstallConfig(): MultiProviderInstallConfig {
   }
 }
 
-export function writeInstallConfig(llm: string, skill: 'none' | 'all' | 'fleet' | 'pm'): void {
+export function writeInstallConfig(
+  llm: string,
+  skill: 'none' | 'all' | 'fleet' | 'pm',
+  workflowsMode: 'all' | 'none' = 'all'
+): void {
   const config = readInstallConfig();
   config.providers[llm] = {
     skill,
+    workflowsMode,
     installedAt: new Date().toISOString()
   };
   fs.mkdirSync(DATA_DIR, { recursive: true });

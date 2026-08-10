@@ -21,6 +21,14 @@ vi.mock('../src/services/statusline.js', () => ({
   writeStatusline: vi.fn(),
 }));
 
+// Agent provisioning is exercised in tests/agent-provisioner.test.ts and the
+// dedicated register/update-member provisioning tests -- stub it out here so
+// these unrelated OOB tests don't attempt real SFTP uploads.
+vi.mock('../src/services/agent-provisioner.js', () => ({
+  provisionAgents: vi.fn().mockResolvedValue({ pushed: [] }),
+  remoteAgentsDir: () => '.claude/agents',
+}));
+
 const mockCollectOobPassword = vi.fn<(name: string, tool: string, opts?: any) => Promise<{ password?: string; fallback?: string; persist?: boolean }>>();
 const mockCollectOobApiKey = vi.fn<(name: string, tool: string, opts?: any) => Promise<{ password?: string; fallback?: string; persist?: boolean }>>();
 
@@ -54,7 +62,7 @@ describe('register_member: anonymous OOB password (Test 3)', () => {
       member_type: 'remote',
       host: '192.168.1.102',
       username: 'akhil',
-      work_folder: '~/git/test',
+      work_folder: '/home/testuser/git/test',
       auth_type: 'password',
     });
 
@@ -71,7 +79,7 @@ describe('register_member: anonymous OOB password (Test 3)', () => {
       member_type: 'remote',
       host: '192.168.1.102',
       username: 'akhil',
-      work_folder: '~/git/test2',
+      work_folder: '/home/testuser/git/test2',
       auth_type: 'password',
     });
 
@@ -88,7 +96,7 @@ describe('register_member: anonymous OOB password (Test 3)', () => {
       member_type: 'remote',
       host: '192.168.1.102',
       username: 'akhil',
-      work_folder: '~/git/test3',
+      work_folder: '/home/testuser/git/test3',
       auth_type: 'password',
     });
 
@@ -102,7 +110,7 @@ describe('register_member: anonymous OOB password (Test 3)', () => {
       member_type: 'remote',
       host: '192.168.1.102',
       username: 'akhil',
-      work_folder: '~/git/test4',
+      work_folder: '/home/testuser/git/test4',
       auth_type: 'password',
       password: 'my-password',
     });
@@ -142,7 +150,7 @@ describe('register_member: named credential auto-create (Test 4)', () => {
       member_type: 'remote',
       host: '192.168.1.102',
       username: 'akhil',
-      work_folder: '~/git/test5',
+      work_folder: '/home/testuser/git/test5',
       auth_type: 'password',
       password: '{{secure.MyLinPass}}',
     });
@@ -165,7 +173,7 @@ describe('register_member: named credential auto-create (Test 4)', () => {
       member_type: 'remote',
       host: '192.168.1.102',
       username: 'akhil',
-      work_folder: '~/git/test6',
+      work_folder: '/home/testuser/git/test6',
       auth_type: 'password',
       password: '{{secure.PersistCred}}',
     });
@@ -187,7 +195,7 @@ describe('register_member: named credential auto-create (Test 4)', () => {
       member_type: 'remote',
       host: '192.168.1.102',
       username: 'akhil',
-      work_folder: '~/git/test7',
+      work_folder: '/home/testuser/git/test7',
       auth_type: 'password',
       password: '{{secure.SessionCred}}',
     });
@@ -207,7 +215,7 @@ describe('register_member: named credential auto-create (Test 4)', () => {
       member_type: 'remote',
       host: '192.168.1.102',
       username: 'akhil',
-      work_folder: '~/git/test8',
+      work_folder: '/home/testuser/git/test8',
       auth_type: 'password',
       password: '{{secure.FailCred}}',
     });

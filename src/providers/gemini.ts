@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import type { ProviderAdapter, PromptOptions, ParsedResponse } from './provider.js';
-import { buildResumeFlag, buildSessionIdFlag } from './provider.js';
+import type { ProviderAdapter, PromptOptions, ParsedResponse, WorkspaceTrustExecFn, EnsureWorkspaceTrustedResult, SessionIdStrategy, TargetOS } from './provider.js';
+import { buildResumeFlag, buildSessionIdFlag, joinForOS, resolveHomeDir } from './provider.js';
 import type { LlmProvider, SSHExecResult } from '../types.js';
 import type { PromptErrorCategory } from '../utils/prompt-errors.js';
 import { escapeDoubleQuoted } from '../os/os-commands.js';
@@ -57,11 +57,15 @@ export class GeminiProvider implements ProviderAdapter {
   }
 
   buildPromptCommand(opts: PromptOptions): string {
-    const { folder, promptFile, sessionId, resuming, unattended, model, inv } = opts;
+    const { folder, promptFile, sessionId, resuming, unattended, model, inv, agentName } = opts;
     const escapedFolder = escapeDoubleQuoted(folder);
     let instruction = `Your task is described in ${promptFile} in the current directory. Read that file first, then execute the task.`;
     if (inv) {
       instruction = `[${inv}] ${instruction}`;
+    }
+    // Gemini activates a subagent via @<name> prepended to the prompt on EVERY dispatch.
+    if (agentName) {
+      instruction = `@${agentName} ${instruction}`;
     }
     let cmd = `cd "${escapedFolder}" && gemini -p "${instruction}" --output-format json --allowed-mcp-server-names "${getAllowedMcpServers()}"`;
     if (resuming && sessionId) {
@@ -122,6 +126,24 @@ export class GeminiProvider implements ProviderAdapter {
     return resuming ? buildResumeFlag(sessionId) : buildSessionIdFlag(sessionId);
   }
 
+  sessionIdStrategy(): SessionIdStrategy {
+    return { type: 'caller-minted' };
+  }
+
+  resolveSessionLogPath(sessionId: string, workFolder: string, homeDir?: string | null, targetOs?: TargetOS): string {
+    const home = resolveHomeDir(homeDir);
+    if (!home) return '';
+    const projectName = workFolder.split(/[\\/]/).pop() ?? 'project';
+    return joinForOS(targetOs, home, '.gemini', 'tmp', projectName, 'chats', `${sessionId}.jsonl`);
+  }
+
+  resolveSessionLogDir(workFolder: string, homeDir?: string | null, targetOs?: TargetOS): string | null {
+    const home = resolveHomeDir(homeDir);
+    if (!home) return null;
+    const projectName = workFolder.split(/[\\/]/).pop() ?? 'project';
+    return joinForOS(targetOs, home, '.gemini', 'tmp', projectName, 'chats');
+  }
+
   modelTiers(): Record<'cheap' | 'standard' | 'premium', string> {
     return {
       cheap: 'gemini-3.5-flash-lite',
@@ -130,7 +152,7 @@ export class GeminiProvider implements ProviderAdapter {
     };
   }
 
-  modelForTier(tier: 'cheap' | 'mid' | 'premium'): string {
+  modelForTier(tier: 'cheap' | 'standard' | 'premium'): string {
     if (tier === 'cheap') return 'gemini-3.5-flash-lite';
     if (tier === 'premium') return 'gemini-3.1-pro-preview';
     return 'gemini-3.5-flash';
@@ -216,6 +238,13 @@ export class GeminiProvider implements ProviderAdapter {
 
   headlessInvocation(promptLiteral: string): string {
     return `--skip-trust -p "${promptLiteral}"`;
+  }
+
+  async ensureWorkspaceTrusted(_workFolder: string, _execCommand: WorkspaceTrustExecFn, _agentOs?: 'linux' | 'macos' | 'windows'): Promise<EnsureWorkspaceTrustedResult> {
+    // apra-fleet-eft.40 provider trust matrix: Gemini has a workspace-trust gate too, but
+    // it is ALREADY handled per-dispatch via --skip-trust in headlessInvocation() above --
+    // no settings-file seeding is needed or correct here.
+    return { seeded: false, detail: 'gemini: trust gate already bypassed per-dispatch via --skip-trust' };
   }
 }
 

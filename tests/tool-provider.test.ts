@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { makeTestAgent, backupAndResetRegistry, restoreRegistry } from './test-helpers.js';
+import { makeTestAgent, backupAndResetRegistry, restoreRegistry, resultText } from './test-helpers.js';
 import { addAgent } from '../src/services/registry.js';
 import { executePrompt } from '../src/tools/execute-prompt.js';
 import { provisionAuth } from '../src/tools/provision-auth.js';
@@ -34,6 +34,14 @@ vi.mock('../src/services/strategy.js', () => ({
 const mockCollectOobApiKey = vi.fn<() => Promise<{ password: string } | { fallback: string }>>();
 vi.mock('../src/services/auth-socket.js', () => ({
   collectOobApiKey: (...args: unknown[]) => mockCollectOobApiKey(...(args as [])),
+}));
+
+// execute_prompt now auto-provisions agent files on first dispatch (see
+// execute-prompt-provisioning.test.ts) -- mock it away here so it doesn't
+// consume the mockExecCommand queue and shift the call-index assertions below.
+vi.mock('../src/services/agent-provisioner.js', () => ({
+  provisionAgents: vi.fn().mockResolvedValue({ pushed: [] }),
+  remoteAgentsDir: vi.fn().mockReturnValue('.claude/agents/pm'),
 }));
 
 // ---------------------------------------------------------------------------
@@ -62,8 +70,8 @@ describe('executePrompt — provider routing', () => {
     });
 
     const result = await executePrompt({ member_id: member.id, prompt: 'hi', resume: false, timeout_s: 5 });
-    expect(result).toContain('claude response');
-    expect(result).toContain('sess-c');
+    expect(resultText(result)).toContain('claude response');
+    expect(resultText(result)).toContain('sess-c');
 
     // calls[0] = writePromptFile, calls[1] = main prompt command
     const cmd = mockExecCommand.mock.calls[1][0] as string;
@@ -81,7 +89,7 @@ describe('executePrompt — provider routing', () => {
     });
 
     const result = await executePrompt({ member_id: member.id, prompt: 'hi', resume: false, timeout_s: 5 });
-    expect(result).toContain('gemini response');
+    expect(resultText(result)).toContain('gemini response');
 
     // calls[0] = writePromptFile, calls[1] = main prompt command
     const cmd = mockExecCommand.mock.calls[1][0] as string;
@@ -98,11 +106,11 @@ describe('executePrompt — provider routing', () => {
     });
 
     const result = await executePrompt({ member_id: member.id, prompt: 'hi', resume: false, timeout_s: 5 });
-    expect(result).toContain('agy response');
+    expect(resultText(result)).toContain('agy response');
 
     // calls[0] = writePromptFile, calls[1] = main prompt command
     const cmd = mockExecCommand.mock.calls[1][0] as string;
-    expect(cmd).toContain('agy -p');
+    expect(cmd).toContain('agy --model');
   });
 
   it('routes Codex member through codex CLI', async () => {

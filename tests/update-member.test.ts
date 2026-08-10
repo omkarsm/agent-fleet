@@ -1,12 +1,38 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { makeTestAgent, makeTestLocalAgent, backupAndResetRegistry, restoreRegistry } from './test-helpers.js';
-import { addAgent } from '../src/services/registry.js';
+import { addAgent, getAllAgents } from '../src/services/registry.js';
 import { updateMember } from '../src/tools/update-member.js';
 import { credentialSet, credentialDelete } from '../src/services/credential-store.js';
+import { ClaudeProvider } from '../src/providers/claude.js';
+import type { SSHExecResult } from '../src/types.js';
+
+const mockExecCommand = vi.fn<(cmd: string, timeout?: number) => Promise<SSHExecResult>>();
+const mockTestConnection = vi.fn();
+
+// Default: connection "fails" so provisionAgents is skipped for tests that don't
+// care about it -- keeps the many pre-existing update-member tests from making
+// real network calls now that update_member re-provisions agent files for remote
+// members. Dedicated provisioning tests below override this per-case.
+vi.mock('../src/services/strategy.js', () => ({
+  getStrategy: () => ({
+    execCommand: mockExecCommand,
+    testConnection: mockTestConnection,
+  }),
+}));
+
+const mockUploadContentToHome = vi.fn();
+vi.mock('../src/services/sftp.js', () => ({
+  uploadContentToHome: (...args: any[]) => mockUploadContentToHome(...args),
+}));
 
 describe('updateMember', () => {
   beforeEach(() => {
     backupAndResetRegistry();
+    mockExecCommand.mockReset();
+    mockTestConnection.mockReset();
+    mockUploadContentToHome.mockReset();
+    mockTestConnection.mockResolvedValue({ ok: false, error: 'not reachable in this test' });
+    mockUploadContentToHome.mockResolvedValue({ success: [], failed: [] });
   });
 
   afterEach(() => {
@@ -109,6 +135,60 @@ describe('updateMember', () => {
     expect(result).toContain('Member was NOT updated.');
   });
 
+  it('stores a valid category', async () => {
+    const member = makeTestLocalAgent();
+    addAgent(member);
+    const result = await updateMember({ member_id: member.id, category: 'doers' });
+    expect(result).toContain('updated');
+    const updated = getAllAgents().find(a => a.id === member.id);
+    expect(updated?.category).toBe('doers');
+  });
+
+  it('clears category when empty string is passed', async () => {
+    const member = makeTestLocalAgent({ category: 'doers' });
+    addAgent(member);
+    const result = await updateMember({ member_id: member.id, category: '' });
+    expect(result).toContain('updated');
+    const updated = getAllAgents().find(a => a.id === member.id);
+    expect(updated?.category).toBeUndefined();
+  });
+
+  it('clears category when whitespace-only string is passed', async () => {
+    const member = makeTestLocalAgent({ category: 'doers' });
+    addAgent(member);
+    const result = await updateMember({ member_id: member.id, category: '   ' });
+    expect(result).toContain('updated');
+    const updated = getAllAgents().find(a => a.id === member.id);
+    expect(updated?.category).toBeUndefined();
+  });
+
+  it('adds tags to a member', async () => {
+    const member = makeTestLocalAgent();
+    addAgent(member);
+    const result = await updateMember({ member_id: member.id, tags: ['gpu', 'prod'] });
+    expect(result).toContain('updated');
+    const updated = getAllAgents().find(a => a.id === member.id);
+    expect(updated?.tags).toEqual(['gpu', 'prod']);
+  });
+
+  it('clears tags when empty array is passed', async () => {
+    const member = makeTestLocalAgent({ tags: ['gpu', 'prod'] });
+    addAgent(member);
+    const result = await updateMember({ member_id: member.id, tags: [] });
+    expect(result).toContain('updated');
+    const updated = getAllAgents().find(a => a.id === member.id);
+    expect(updated?.tags).toBeUndefined();
+  });
+
+  it('replaces existing tags with new tags', async () => {
+    const member = makeTestLocalAgent({ tags: ['old-tag', 'another-old'] });
+    addAgent(member);
+    const result = await updateMember({ member_id: member.id, tags: ['new-tag'] });
+    expect(result).toContain('updated');
+    const updated = getAllAgents().find(a => a.id === member.id);
+    expect(updated?.tags).toEqual(['new-tag']);
+  });
+
   it('does not warn when updating a cloud member', async () => {
     const member = makeTestAgent({ // A remote member with a cloud property
       cloud: {
@@ -127,5 +207,183 @@ describe('updateMember', () => {
 
     expect(result).not.toContain('Warning:');
     expect(result).toContain('Member "test-agent" updated.');
+  });
+});
+
+describe('updateMember -- agent re-provisioning (remote members)', () => {
+  beforeEach(() => {
+    backupAndResetRegistry();
+    mockExecCommand.mockReset();
+    mockTestConnection.mockReset();
+    mockUploadContentToHome.mockReset();
+    mockTestConnection.mockResolvedValue({ ok: false, error: 'not reachable in this test' });
+    mockUploadContentToHome.mockResolvedValue({ success: [], failed: [] });
+  });
+
+  afterEach(() => {
+    restoreRegistry();
+  });
+
+  it('re-provisions agent files once connectivity is confirmed', async () => {
+    const member = makeTestAgent({ llmProvider: 'claude' });
+    addAgent(member);
+
+    mockTestConnection.mockResolvedValue({ ok: true, latencyMs: 5 });
+    mockExecCommand.mockResolvedValue({ stdout: '', stderr: '', code: 0 }); // empty remote dir -> push everything
+    mockUploadContentToHome.mockResolvedValue({ success: ['planner.md', 'doer.md'], failed: [] });
+
+    const result = await updateMember({ member_id: member.id, category: 'doers' });
+
+    expect(result).toContain('Member "test-agent" updated.');
+    expect(mockUploadContentToHome).toHaveBeenCalled();
+    expect(result).toMatch(/Agents:\s+\d+ file\(s\) provisioned/);
+  });
+
+  it('appends a warning but still updates when the provisioning probe fails', async () => {
+    const member = makeTestAgent({ llmProvider: 'claude' });
+    addAgent(member);
+
+    mockTestConnection.mockResolvedValue({ ok: true, latencyMs: 5 });
+    mockExecCommand.mockResolvedValue({ stdout: '', stderr: 'boom', code: 1 }); // probe fails
+
+    const result = await updateMember({ member_id: member.id, category: 'doers' });
+
+    expect(result).toContain('Member "test-agent" updated.');
+    expect(result).toContain('Could not verify remote agent files');
+    expect(mockUploadContentToHome).not.toHaveBeenCalled();
+  });
+
+  it('re-provisions at the new provider path when llm_provider is switched', async () => {
+    const member = makeTestAgent({ llmProvider: 'claude' });
+    addAgent(member);
+
+    mockTestConnection.mockResolvedValue({ ok: true, latencyMs: 5 });
+    // New provider's remote dir has never been provisioned -- empty probe -> push everything.
+    mockExecCommand.mockResolvedValue({ stdout: '', stderr: '', code: 0 });
+    mockUploadContentToHome.mockResolvedValue({ success: ['planner.md'], failed: [] });
+
+    const result = await updateMember({ member_id: member.id, llm_provider: 'gemini' });
+
+    expect(result).toContain('Provider: gemini');
+    expect(mockUploadContentToHome).toHaveBeenCalledTimes(1);
+    const [, , calledDir] = mockUploadContentToHome.mock.calls[0];
+    expect(calledDir).toBe('.gemini/agents');
+  });
+
+  it('skips provisioning with a warning when unreachable, but still applies the update', async () => {
+    const member = makeTestAgent();
+    addAgent(member);
+
+    mockTestConnection.mockResolvedValue({ ok: false, error: 'connection timed out' });
+
+    const result = await updateMember({ member_id: member.id, category: 'doers' });
+
+    expect(result).toContain('Member "test-agent" updated.');
+    expect(result).toContain('Could not reach member -- agent files not re-provisioned: connection timed out');
+    expect(mockExecCommand).not.toHaveBeenCalled();
+    expect(mockUploadContentToHome).not.toHaveBeenCalled();
+  });
+
+  it('does not attempt provisioning for local members', async () => {
+    const member = makeTestLocalAgent();
+    addAgent(member);
+
+    const result = await updateMember({ member_id: member.id, category: 'doers' });
+
+    expect(result).toContain('updated');
+    expect(mockTestConnection).not.toHaveBeenCalled();
+    expect(mockUploadContentToHome).not.toHaveBeenCalled();
+  });
+
+  it('does not attempt a connection or emit a provisioning warning for a codex remote member (no agents dir)', async () => {
+    const member = makeTestAgent({ llmProvider: 'codex' });
+    addAgent(member);
+
+    const result = await updateMember({ member_id: member.id, category: 'doers' });
+
+    expect(result).toContain('Member "test-agent" updated.');
+    expect(mockTestConnection).not.toHaveBeenCalled();
+    expect(mockExecCommand).not.toHaveBeenCalled();
+    expect(mockUploadContentToHome).not.toHaveBeenCalled();
+    expect(result).not.toContain('Could not reach member');
+    expect(result).not.toContain('Agents:');
+  });
+
+  it('does not attempt a connection or emit a provisioning warning for a copilot remote member (no agents dir)', async () => {
+    const member = makeTestAgent({ llmProvider: 'copilot' });
+    addAgent(member);
+
+    const result = await updateMember({ member_id: member.id, category: 'doers' });
+
+    expect(result).toContain('Member "test-agent" updated.');
+    expect(mockTestConnection).not.toHaveBeenCalled();
+    expect(mockExecCommand).not.toHaveBeenCalled();
+    expect(mockUploadContentToHome).not.toHaveBeenCalled();
+    expect(result).not.toContain('Could not reach member');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// apra-fleet-eft.40.2 -- ensureWorkspaceTrusted invoked from update_member
+// ---------------------------------------------------------------------------
+
+describe('updateMember -- invokes ensureWorkspaceTrusted (apra-fleet-eft.40.2)', () => {
+  beforeEach(() => {
+    backupAndResetRegistry();
+    mockExecCommand.mockReset();
+    mockTestConnection.mockReset();
+    mockUploadContentToHome.mockReset();
+  });
+
+  afterEach(() => {
+    restoreRegistry();
+  });
+
+  it('calls ensureWorkspaceTrusted with the resolved work_folder for a reachable remote Claude member', async () => {
+    const member = makeTestAgent({ llmProvider: 'claude', workFolder: '/home/testuser/project' });
+    addAgent(member);
+    mockTestConnection.mockResolvedValue({ ok: true, latencyMs: 5 });
+    mockExecCommand.mockResolvedValue({ stdout: '', stderr: '', code: 0 });
+    mockUploadContentToHome.mockResolvedValue({ success: [], failed: [] });
+
+    const spy = vi.spyOn(ClaudeProvider.prototype, 'ensureWorkspaceTrusted');
+
+    const result = await updateMember({ member_id: member.id, category: 'doers' });
+
+    expect(result).toContain('Member "test-agent" updated.');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('/home/testuser/project', expect.any(Function), member.os);
+    spy.mockRestore();
+  });
+
+  it('does NOT call ensureWorkspaceTrusted (or execCommand at all) when the remote member is unreachable', async () => {
+    const member = makeTestAgent({ llmProvider: 'claude' });
+    addAgent(member);
+    mockTestConnection.mockResolvedValue({ ok: false, error: 'connection timed out' });
+
+    const spy = vi.spyOn(ClaudeProvider.prototype, 'ensureWorkspaceTrusted');
+
+    const result = await updateMember({ member_id: member.id, category: 'doers' });
+
+    expect(result).toContain('Member "test-agent" updated.');
+    expect(spy).not.toHaveBeenCalled();
+    expect(mockExecCommand).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('calls ensureWorkspaceTrusted for a local member (no connectivity gate)', async () => {
+    const member = makeTestLocalAgent({ llmProvider: 'claude' });
+    addAgent(member);
+    mockExecCommand.mockResolvedValue({ stdout: '', stderr: '', code: 0 });
+
+    const spy = vi.spyOn(ClaudeProvider.prototype, 'ensureWorkspaceTrusted');
+
+    const result = await updateMember({ member_id: member.id, category: 'doers' });
+
+    expect(result).toContain('updated');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(member.workFolder, expect.any(Function), member.os);
+    expect(mockTestConnection).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

@@ -38,6 +38,11 @@
     "host": "local",
     "work_folder": "/Users/akhil/git/apra-fleet-e2e-rev"
   },
+  "opencode": {
+    "host": "192.168.1.102",
+    "username": "akhil",
+    "work_folder": "/home/akhil/git/apra-fleet-e2e"
+  },
   "toy_projects": {
     "github":    "https://github.com/Apra-Labs/fleet-e2e-toy",
     "bitbucket": "https://bitbucket.org/kumaakh/fleet-e2e-toy",

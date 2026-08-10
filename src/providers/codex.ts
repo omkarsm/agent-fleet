@@ -1,4 +1,4 @@
-import type { ProviderAdapter, PromptOptions, ParsedResponse } from './provider.js';
+import type { ProviderAdapter, PromptOptions, ParsedResponse, WorkspaceTrustExecFn, EnsureWorkspaceTrustedResult, SessionIdStrategy, TargetOS } from './provider.js';
 import type { LlmProvider, SSHExecResult } from '../types.js';
 import type { PromptErrorCategory } from '../utils/prompt-errors.js';
 import { escapeDoubleQuoted } from '../os/os-commands.js';
@@ -107,6 +107,18 @@ export class CodexProvider implements ProviderAdapter {
     return false;
   }
 
+  sessionIdStrategy(): SessionIdStrategy {
+    return { type: 'provider-minted' };
+  }
+
+  resolveSessionLogPath(_sessionId: string, _workFolder: string, _homeDir?: string | null, _targetOs?: TargetOS): string {
+    return '';
+  }
+
+  resolveSessionLogDir(_workFolder: string, _homeDir?: string | null, _targetOs?: TargetOS): string | null {
+    return null;
+  }
+
   resumeFlag(_sessionId?: string): string {
     return 'resume';
   }
@@ -119,7 +131,7 @@ export class CodexProvider implements ProviderAdapter {
     };
   }
 
-  modelForTier(tier: 'cheap' | 'mid' | 'premium'): string {
+  modelForTier(tier: 'cheap' | 'standard' | 'premium'): string {
     if (tier === 'cheap') return 'gpt-5.4-mini';
     return 'gpt-5.4';
   }
@@ -198,6 +210,14 @@ export class CodexProvider implements ProviderAdapter {
 
   headlessInvocation(promptLiteral: string): string {
     return `exec "${promptLiteral}"`;
+  }
+
+  async ensureWorkspaceTrusted(_workFolder: string, _execCommand: WorkspaceTrustExecFn, _agentOs?: 'linux' | 'macos' | 'windows'): Promise<EnsureWorkspaceTrustedResult> {
+    // apra-fleet-eft.40 was scoped to the Claude workspace-trust gate (see the
+    // provider-trust-matrix note on the parent bug); Codex was not part of that
+    // investigation and no equivalent per-project trust gate is known. No-op until a
+    // Codex-specific gate is live-verified.
+    return { seeded: false, detail: 'codex: no known per-project trust gate' };
   }
 }
 
