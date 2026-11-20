@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { capabilities } from '../fleet-sprint/vcs-module.mjs';
-import { runDevelopLoopScenario, withScenarioMarkers } from './helpers/mock-sprint-harness.mjs';
+import { runDevelopLoopScenario, withScenarioMarkers, withStagedBody } from './helpers/mock-sprint-harness.mjs';
 
 const check = (cond, msg) => assert.ok(cond, msg);
 
@@ -63,8 +63,18 @@ test('mock sprint: non-hosted (file://) origin remote skips PR creation and clos
         );
 
         check(
-            run.logs.some((m) => m.includes('is not a gh-hostable GitHub remote') && m.includes('skipping PR creation entirely')),
+            run.logs.some((m) => m.includes('cannot open a pull request') && m.includes('skipping PR creation entirely')),
             `Expected a logged message noting PR creation was skipped for the non-hosted remote, logs: ${JSON.stringify(run.logs)}`
+        );
+        // apra-fleet-3swo.4.10: the gate itself (VCSModule.capabilities()) was
+        // already provider-agnostic -- only the LOG WORDING used to say "not a
+        // gh-hostable GitHub remote" regardless of which provider's host it
+        // actually failed to match. Pin that the message is provider-neutral
+        // now (no GitHub-specific wording survives for a generic non-hosted
+        // remote like this test's file:// fixture).
+        check(
+            !run.logs.some((m) => m.includes('gh-hostable GitHub remote')),
+            `Expected no GitHub-specific wording in the non-hosted-remote skip log, logs: ${JSON.stringify(run.logs)}`
         );
         check(
             run.logs.some((m) => m.includes(`closed target issue '${run.epicBeadId}' directly`)),
@@ -96,7 +106,7 @@ test('mock sprint: hosted GitHub origin remote still routes through PR creation 
             `Expected the origin-remote classification probe to be dispatched, commandLog: ${JSON.stringify(run.commandLog)}`
         );
         check(
-            run.commandLog.some((c) => /^curl -sS -X POST\b/.test(c) && /\/pulls\b/.test(c) && c.includes(`"head":"${run.branch}"`)),
+            run.commandLog.some((c) => /^curl -sS -X POST\b/.test(c) && /\/pulls\b/.test(c) && withStagedBody(c).includes(`"head":"${run.branch}"`)),
             `Expected VCSModule's PR-create curl command to still be dispatched for the hosted remote, commandLog: ${JSON.stringify(run.commandLog)}`
         );
 

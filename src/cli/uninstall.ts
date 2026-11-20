@@ -1,12 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import * as readlinePromises from 'node:readline/promises';
 import { serverVersion } from '../version.js';
+import { windowsExecutable } from '../os/windows-executable.js';
 import type { LlmProvider } from '../types.js';
 import { isApraFleetRunning } from './install.js';
 import { getServiceManager } from '../services/service-manager/index.js';
+import {
+  cleanupSupervisorService,
+  type SupervisorCleanupResult,
+  type SupervisorRegistration,
+} from '../services/supervisor-service-cleanup.js';
 import {
   BIN_DIR,
   HOOKS_DIR,
@@ -23,10 +29,11 @@ import {
   ProviderInstallConfig
 } from './config.js';
 import { BUILTIN_WORKFLOW_NAMES } from './workflow-assets.js';
+import { claudePluginsDir, isApraFleetStatusLine, uninstallClaudeMod } from './claude-mod.js';
 
 function run(cmd: string, opts?: Record<string, unknown>): void {
   const shellOpt = process.platform === 'win32' ? { shell: 'cmd.exe' } : {};
-  execSync(cmd, { stdio: 'inherit', ...shellOpt, ...opts });
+  execSync(cmd, { stdio: 'inherit', windowsHide: true, ...shellOpt, ...opts });
 }
 
 function cleanupSettings(paths: ProviderInstallConfig, dryRun: boolean): boolean {
@@ -122,7 +129,9 @@ function cleanupSettings(paths: ProviderInstallConfig, dryRun: boolean): boolean
       } catch {}
     }
   } else {
-    // Claude uses "PostToolUse", Gemini uses "AfterTool"
+    // "AfterTool" is kept alongside Claude's "PostToolUse" so uninstall still
+    // cleans up hook entries left behind by a now-removed provider that used
+    // that event name.
     const hookEventNames = ['PostToolUse', 'AfterTool'];
     for (const eventName of hookEventNames) {
       if (settings.hooks?.[eventName]) {
@@ -140,7 +149,7 @@ function cleanupSettings(paths: ProviderInstallConfig, dryRun: boolean): boolean
   }
 
   // 4. StatusLine
-  if (settings.statusLine?.command?.includes('fleet-statusline')) {
+  if (isApraFleetStatusLine(settings.statusLine)) {
     console.log(`  - Removing statusLine configuration`);
     if (!dryRun) delete settings.statusLine;
     changed = true;
@@ -168,11 +177,18 @@ function cleanupSettings(paths: ProviderInstallConfig, dryRun: boolean): boolean
 // dry-run prints the identical plan without mutating the filesystem -- every
 // mutation below is gated by `!dryRun` while the console output that
 // describes the plan runs unconditionally, mirroring cleanupSettings() above.
-function cleanupWorkflows(dryRun: boolean): boolean {
+interface WorkflowsCleanupResult {
+  anythingRemoved: boolean;
+  /** User-authored workflows/<name>/ dirs left in place (workflows/ root kept). */
+  keptUserWorkflows: string[];
+}
+
+function cleanupWorkflows(dryRun: boolean): WorkflowsCleanupResult {
   let anythingRemoved = false;
+  let keptUserWorkflows: string[] = [];
 
   if (!fs.existsSync(WORKFLOWS_DIR) && !fs.existsSync(NODE_MODULES_DIR) && !fs.existsSync(SCHEMAS_DIR)) {
-    return false;
+    return { anythingRemoved: false, keptUserWorkflows };
   }
 
   console.log('Cleaning up workflow subsystem...');
@@ -204,7 +220,7 @@ function cleanupWorkflows(dryRun: boolean): boolean {
 
     const entries = (fs.readdirSync(WORKFLOWS_DIR, { withFileTypes: true }) || []) as fs.Dirent[];
     const dirNames = entries.filter(e => e.isDirectory()).map(e => e.name);
-    const keptUserWorkflows = dirNames.filter(name => !builtinNames.includes(name));
+    keptUserWorkflows = dirNames.filter(name => !builtinNames.includes(name));
 
     for (const name of dirNames) {
       if (!builtinNames.includes(name)) continue;
@@ -223,10 +239,138 @@ function cleanupWorkflows(dryRun: boolean): boolean {
     }
   }
 
-  return anythingRemoved;
+  return { anythingRemoved, keptUserWorkflows };
 }
 
-export async function runUninstall(args: string[]): Promise<void> {
+/**
+ * Full-uninstall "Kept (intentionally)" section: every top-level entry under
+ * FLEET_BASE that is still present (real run) or that the plan would leave
+ * (dry-run), plus any fleet-supervisor registration left in place because it
+ * is not ours -- so nothing is left behind silently.
+ *
+ * Real run: lists what actually exists AFTER cleanup (a failed delete still
+ * shows up). Dry-run: subtracts the entries the plan removes.
+ */
+function printKeptSection(
+  dryRun: boolean,
+  keptUserWorkflows: string[],
+  keptSupervisorRegs: SupervisorRegistration[],
+  claudeModPlanned: boolean,
+): void {
+  const plannedRemovals = new Set<string>();
+  if (dryRun) {
+    for (const p of [BIN_DIR, HOOKS_DIR, SCRIPTS_DIR, NODE_MODULES_DIR, SCHEMAS_DIR]) plannedRemovals.add(path.basename(p));
+    if (claudeModPlanned) plannedRemovals.add(path.basename(claudePluginsDir()));
+    if (keptUserWorkflows.length === 0) plannedRemovals.add(path.basename(WORKFLOWS_DIR));
+  }
+
+  let topLevel: string[] = [];
+  try {
+    topLevel = ((fs.readdirSync(FLEET_BASE) || []) as unknown[]).map(e => String(e));
+  } catch { /* FLEET_BASE absent: nothing else to list */ }
+  const names = ['data', 'fleet.key', ...topLevel.filter(n => n !== 'data' && n !== 'fleet.key')];
+
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    if (plannedRemovals.has(name)) continue;
+    const abs = path.join(FLEET_BASE, name);
+    if (!fs.existsSync(abs)) continue;
+    let reason: string;
+    if (name === 'data') {
+      reason = 'registry, logs and credentials (kept so a reinstall keeps your fleet)';
+    } else if (name === 'fleet.key') {
+      reason = 'JWT signing key -- lives OUTSIDE data/, so back it up separately from data/';
+    } else if (name === path.basename(WORKFLOWS_DIR) && keptUserWorkflows.length > 0) {
+      reason = `user-authored workflows: ${keptUserWorkflows.join(', ')}`;
+    } else {
+      reason = 'left in place (uninstall does not remove it)';
+    }
+    lines.push(`  - ${abs}: ${reason}`);
+  }
+  for (const reg of keptSupervisorRegs) {
+    lines.push(`  - fleet-supervisor service registration ${reg.name} (target: ${reg.target ?? 'unknown'}): not installed by apra-fleet, left in place`);
+  }
+
+  if (lines.length === 0) return;
+  console.log('\nKept (intentionally):');
+  for (const line of lines) console.log(line);
+}
+
+/**
+ * Test seams for runUninstall: the remover, the deferred-delete spawn and the
+ * retry pause are injectable so the locked-exe path can be driven on any OS.
+ */
+export interface UninstallDeps {
+  /** Remove one path (recursive, forced). Default: fs.rmSync. */
+  remove?: (p: string) => void;
+  /** Launch a command detached and hidden. Default: child_process.spawn + unref. */
+  spawnDetached?: (cmd: string, args: string[]) => void;
+  /** Pause between removal retries. Default: a short synchronous wait. */
+  sleep?: (ms: number) => void;
+}
+
+const REMOVE_ATTEMPTS = 3;
+const REMOVE_RETRY_MS = 150;
+
+function defaultRemove(p: string): void {
+  fs.rmSync(p, { recursive: true, force: true });
+}
+
+function defaultSpawnDetached(cmd: string, args: string[]): void {
+  const child = spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true });
+  child.unref();
+}
+
+function defaultSleep(ms: number): void {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* best effort */ }
+}
+
+interface RemovalFailure {
+  path: string;
+  error: unknown;
+}
+
+/** Same Windows path (case-insensitive, separators normalised): execPath's case can differ from a readdir join. */
+function sameWin32Path(a: string, b: string): boolean {
+  return path.win32.normalize(a).toLowerCase() === path.win32.normalize(b).toLowerCase();
+}
+
+function errCode(e: unknown): string | undefined {
+  return (e as NodeJS.ErrnoException | undefined)?.code;
+}
+
+/** PowerShell that waits for this PID to exit, then removes dir (retrying briefly). */
+function deferredDeleteScript(pid: number, dir: string): string {
+  const q = dir.replace(/'/g, "''");
+  return [
+    `try { Wait-Process -Id ${pid} -ErrorAction SilentlyContinue } catch {}`,
+    `for ($i = 0; $i -lt 30; $i++) {`,
+    `  try { Remove-Item -LiteralPath '${q}' -Recurse -Force -ErrorAction Stop; break } catch { Start-Sleep -Seconds 1 }`,
+    `}`,
+  ].join('\n');
+}
+
+/**
+ * Wait for the confirmation answer. readline/promises question() never
+ * settles on end-of-input, so it is raced against the interface's close event;
+ * returns null when the input closed before an answer.
+ */
+async function askConfirmation(prompt: string): Promise<string | null> {
+  const rl = readlinePromises.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const closed = new Promise<null>(resolve => {
+      if (typeof (rl as any).once === 'function') (rl as any).once('close', () => resolve(null));
+    });
+    return await Promise.race([rl.question(prompt), closed]);
+  } finally {
+    rl.close();
+  }
+}
+
+export async function runUninstall(args: string[], deps: UninstallDeps = {}): Promise<void> {
   if (args.includes('--help') || args.includes('-h')) {
     console.log(`apra-fleet uninstall
 
@@ -242,7 +386,7 @@ Usage:
   apra-fleet uninstall --help            Show this help
 
 Options:
-  --llm <provider>   Specific provider to clean up: claude, gemini, codex, copilot, agy, opencode.
+  --llm <provider>   Specific provider to clean up: claude, codex, copilot, agy, opencode.
   --skill <mode>     Skills to remove: fleet, pm, workflows, or all (default). "workflows" removes
                       the ~/.apra-fleet/{node_modules,schemas} runtime and built-in workflow dirs,
                       leaving any user-authored workflows/<name>/ directories in place.
@@ -299,49 +443,60 @@ Options:
   console.log(`\nUninstalling Apra Fleet ${serverVersion}...${dryRun ? ' (DRY RUN)' : ''}\n`);
 
   const svcMgr = await getServiceManager();
+  const isFullUninstall = targetLlm === 'all' && skillMode === 'all';
 
-  if (isApraFleetRunning()) {
-    if (dryRun && force) {
-      console.log('  Note: apra-fleet server is currently running (would be stopped by --force).');
-    } else if (force) {
-      if (!dryRun) {
-        try { await svcMgr.stop(); } catch {}
-        console.log('  Stopped running server.');
-      }
-    } else {
-      console.error('Error: apra-fleet server is currently running.\n\n  Run with --force to stop it automatically:\n    apra-fleet uninstall --force\n');
-      process.exit(1);
-      return;
-    }
-  }
-
-  // Remove service unit (idempotent -- tolerates "not installed")
-  if (!dryRun) {
-    try { await svcMgr.unregister(); } catch {}
+  // (1) Refuse while the server runs, unless --force.
+  const serverRunning = isApraFleetRunning();
+  if (serverRunning && !force) {
+    console.error('Error: apra-fleet server is currently running.\n\n  Run with --force to stop it automatically:\n    apra-fleet uninstall --force\n');
+    process.exit(1);
+    return;
   }
 
   const installConfig = readInstallConfig();
   const recordedProviders = Object.keys(installConfig.providers) as LlmProvider[];
   const isFallback = recordedProviders.length === 0;
   const providersToClean = targetLlm === 'all' 
-    ? (recordedProviders.length > 0 ? recordedProviders : (['claude', 'gemini', 'codex', 'copilot', 'agy'] as LlmProvider[]))
+    ? (recordedProviders.length > 0 ? recordedProviders : (['claude', 'codex', 'copilot', 'agy'] as LlmProvider[]))
     : [targetLlm];
 
   if (isFallback && targetLlm === 'all') {
     console.log('No recorded installations found. Scanning all known provider paths...');
   }
 
+  // (2) Confirm before any side effect (stop/unregister/removals).
   if (!skipConfirm && !dryRun) {
-    const rl = readlinePromises.createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await rl.question(`Are you sure you want to uninstall Apra Fleet? (y/N): `);
-    rl.close();
+    const answer = await askConfirmation(`Are you sure you want to uninstall Apra Fleet? (y/N): `);
+    if (answer === null) {
+      console.error('Aborted: no confirmation received (input closed). Re-run with --yes to uninstall non-interactively.');
+      process.exit(1);
+      return;
+    }
     if (answer.toLowerCase() !== 'y') {
       console.log('Aborted.');
       process.exit(0);
+      return;
     }
   }
 
+  // (3) --force server stop.
+  if (serverRunning) {
+    if (dryRun) {
+      console.log('  Note: apra-fleet server is currently running (would be stopped by --force).');
+    } else {
+      try { await svcMgr.stop(); } catch {}
+      console.log('  Stopped running server.');
+    }
+  }
+
+  // (4) Remove the service unit (idempotent -- tolerates "not installed"),
+  // only on a full uninstall: a partial one leaves the service registered.
+  if (!dryRun && isFullUninstall) {
+    try { await svcMgr.unregister(); } catch {}
+  }
+
   let anythingRemoved = false;
+  let claudeModPlanned = false;
 
   for (const llm of providersToClean) {
     const paths = getProviderInstallConfig(llm);
@@ -355,6 +510,12 @@ Options:
             run('claude mcp remove apra-fleet --scope user', { stdio: 'ignore' });
             anythingRemoved = true;
           } catch { /* already removed or not found */ }
+        }
+        // fleet-status Claude Code mod: before cleanupSettings, since the
+        // claude CLI edits the same settings file.
+        if (uninstallClaudeMod(paths, dryRun)) {
+          anythingRemoved = true;
+          claudeModPlanned = true;
         }
       }
 
@@ -398,6 +559,16 @@ Options:
         anythingRemoved = true;
       }
     }
+    // fleet-supervisor helper skill -- same provider-agnostic install/removal
+    // rationale as fleet-sprint-cli above.
+    if (skillMode === 'all' || skillMode === 'pm' || skillMode === 'fleet') {
+      const supervisorSkillDir = path.join(paths.configDir, 'skills', 'fleet-supervisor');
+      if (fs.existsSync(supervisorSkillDir)) {
+        console.log(`  - Removing fleet-supervisor skill: ${supervisorSkillDir}`);
+        if (!dryRun) fs.rmSync(supervisorSkillDir, { recursive: true, force: true });
+        anythingRemoved = true;
+      }
+    }
     if (skillMode === 'all' || skillMode === 'fleet') {
       if (fs.existsSync(paths.fleetSkillsDir)) {
         console.log(`  - Removing fleet skills: ${paths.fleetSkillsDir}`);
@@ -409,38 +580,128 @@ Options:
 
   // Workflow subsystem removal (Phase 3 - Task 8): shared ~/.apra-fleet assets,
   // not tied to any specific --llm target.
+  let supervisorCleanup: SupervisorCleanupResult = { removed: [], kept: [], failed: [] };
+  let keptUserWorkflows: string[] = [];
   if (skillMode === 'all' || skillMode === 'workflows') {
-    if (cleanupWorkflows(dryRun)) anythingRemoved = true;
+    // The fleet-sprint supervisor OS service runs serve.mjs out of
+    // workflows/fleet-sprint, so it is stopped and unregistered BEFORE that
+    // tree is deleted -- and unconditionally here, not inside
+    // cleanupWorkflows(), which returns early when the tree is already gone
+    // (a re-run after an uninstall that left the unit behind).
+    supervisorCleanup = cleanupSupervisorService(dryRun);
+    if (supervisorCleanup.removed.length > 0 || supervisorCleanup.failed.length > 0) anythingRemoved = true;
+    // A full uninstall reports foreign registrations in its Kept section
+    // below; a partial one reports them here.
+    if (!isFullUninstall) {
+      for (const reg of supervisorCleanup.kept) {
+        console.log(`  - Keeping fleet-supervisor service registration ${reg.name} (target: ${reg.target ?? 'unknown'}): not installed by apra-fleet, left in place`);
+      }
+    }
+    const workflowsCleanup = cleanupWorkflows(dryRun);
+    if (workflowsCleanup.anythingRemoved) anythingRemoved = true;
+    keptUserWorkflows = workflowsCleanup.keptUserWorkflows;
   }
 
-  if (!dryRun && targetLlm === 'all' && skillMode === 'all') {
+  const removalFailures: RemovalFailure[] = [];
+  let deferredDelete: { dir: string; command: string } | null = null;
+  if (!dryRun && isFullUninstall) {
+    const remove = deps.remove ?? defaultRemove;
+    const sleep = deps.sleep ?? defaultSleep;
+    const removeWithRetry = (p: string): boolean => {
+      let last: unknown;
+      for (let i = 0; i < REMOVE_ATTEMPTS; i++) {
+        try { remove(p); return true; } catch (e) {
+          last = e;
+          if (i < REMOVE_ATTEMPTS - 1) sleep(REMOVE_RETRY_MS);
+        }
+      }
+      removalFailures.push({ path: p, error: last });
+      return false;
+    };
+
     console.log('\nCleaning up global fleet files...');
     if (fs.existsSync(BIN_DIR)) {
       console.log(`  - Removing binary dir: ${BIN_DIR}`);
-      fs.rmSync(BIN_DIR, { recursive: true, force: true });
+      // Each entry independently, so one locked file (the running exe on
+      // Windows) never skips the rest.
+      let entries: string[] | null = null;
+      try { entries = ((fs.readdirSync(BIN_DIR) || []) as unknown[]).map(e => String(e)); } catch { entries = null; }
+      let binClean = true;
+      for (const name of entries ?? []) {
+        if (!removeWithRetry(path.join(BIN_DIR, name))) binClean = false;
+      }
+      if (entries === null || binClean) removeWithRetry(BIN_DIR);
     }
     if (fs.existsSync(HOOKS_DIR)) {
       console.log(`  - Removing hooks dir: ${HOOKS_DIR}`);
-      fs.rmSync(HOOKS_DIR, { recursive: true, force: true });
+      removeWithRetry(HOOKS_DIR);
     }
     if (fs.existsSync(SCRIPTS_DIR)) {
       console.log(`  - Removing scripts dir: ${SCRIPTS_DIR}`);
-      fs.rmSync(SCRIPTS_DIR, { recursive: true, force: true });
+      removeWithRetry(SCRIPTS_DIR);
     }
     // Note: we don't remove FLEET_BASE/data to preserve logs/registry if user reinstalls.
     // But we should remove the install-config.json if it was a full uninstall.
     const configPath = path.join(FLEET_BASE, 'data', 'install-config.json');
     if (fs.existsSync(configPath)) {
-      fs.unlinkSync(configPath);
+      try { fs.unlinkSync(configPath); } catch (e) { removalFailures.push({ path: configPath, error: e }); }
+    }
+
+    // Windows: the running exe cannot be unlinked. When that is the ONLY
+    // failure, hand BIN_DIR's removal to a detached process that waits for us.
+    const lockedExeOnly = process.platform === 'win32'
+      && removalFailures.length > 0
+      && removalFailures.every(f => sameWin32Path(f.path, process.execPath) && (errCode(f.error) === 'EPERM' || errCode(f.error) === 'EBUSY'));
+    if (lockedExeOnly) {
+      const manual = `Remove-Item -LiteralPath '${BIN_DIR.replace(/'/g, "''")}' -Recurse -Force`;
+      try {
+        const encoded = Buffer.from(deferredDeleteScript(process.pid, BIN_DIR), 'utf16le').toString('base64');
+        (deps.spawnDetached ?? defaultSpawnDetached)(windowsExecutable('powershell.exe'),
+          ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded]);
+        deferredDelete = { dir: BIN_DIR, command: manual };
+        removalFailures.length = 0;
+      } catch (e) {
+        removalFailures.push({ path: 'deferred-delete', error: e });
+      }
     }
   }
 
+  if (isFullUninstall) {
+    printKeptSection(dryRun, keptUserWorkflows, supervisorCleanup.kept, claudeModPlanned);
+  }
+
+  // One final status line: "Uninstall complete." only when nothing failed;
+  // a failed supervisor removal ends with "Uninstall incomplete" + exit 1.
+  const incomplete = supervisorCleanup.failed.length > 0 || removalFailures.length > 0;
   if (anythingRemoved) {
-    console.log('\nUninstall complete.');
+    if (!incomplete) console.log('\nUninstall complete.');
     console.log('\n⚠ Note: Surgical cleanup of settings (MCP, permissions, hooks) was performed.');
     console.log('  If you manually modified these settings, some entries might remain.');
     console.log('  Please review your provider settings files if you suspect residual config.');
   } else {
     console.log('\nNothing to remove — no apra-fleet installation found for the specified scope.');
+  }
+
+  if (deferredDelete) {
+    console.log(`\nThe running executable (${process.execPath}) cannot be deleted while it runs.`);
+    console.log(`  A background process will remove ${deferredDelete.dir} once this command exits.`);
+    console.log('  If it is still there later, remove it manually with:');
+    console.log(`    ${deferredDelete.command}`);
+  }
+
+  if (incomplete) {
+    if (supervisorCleanup.failed.length > 0) {
+      console.error('\nUninstall incomplete: the following fleet-supervisor service registration(s) could not be removed:');
+      for (const { reg, error } of supervisorCleanup.failed) {
+        console.error(`  - ${reg.name}: ${error}`);
+      }
+    }
+    if (removalFailures.length > 0) {
+      console.error('\nUninstall incomplete: the following path(s) could not be removed:');
+      for (const f of removalFailures) {
+        console.error(`  - ${f.path}: ${f.error instanceof Error ? f.error.message : String(f.error)}`);
+      }
+    }
+    process.exit(1);
   }
 }

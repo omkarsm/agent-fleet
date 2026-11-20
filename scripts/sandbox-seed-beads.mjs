@@ -24,6 +24,7 @@
 //   bd dolt push                                                                             (cwd: toy repo)
 
 import { rmSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execBdSync } from './lib/exec-bd.mjs';
@@ -90,6 +91,51 @@ function parseArgs(argv) {
     return out;
 }
 
+// bd's dolt-remote-history probe runs a `git` command against `remote`
+// (a directory this script just created via mkdirSync moments earlier), and
+// on a resource-constrained CI runner that probe has been observed to return
+// a non-zero exit under I/O latency; bd conservatively treats a failed probe
+// as "assume history exists" and refuses `--from-jsonl` init entirely
+// (observed message: "bd init refuses: remote 'origin' already has Dolt
+// history (refs/dolt/data)"), even though we know deterministically the
+// directory is empty -- we created it ourselves synchronously just above.
+// Retrying is therefore safe (not error-masking): a real "actually has
+// history" refusal is not something a retry could produce, since nothing
+// else writes to this sandbox-local directory between attempts.
+//
+// apra-fleet-4ipl: this retry logic never actually fired. `stdio: 'inherit'`
+// sends bd's stdout/stderr straight to this process's own inherited streams,
+// so Node's execFileSync captures NONE of it -- the thrown error's .message
+// is just "Command failed: <cmd>", never the actual "already has Dolt
+// history" text, which only ever existed in the discarded child output.
+// isProbeRaceRefusal was therefore always false and every failure rethrew on
+// attempt 1, exactly as if there were no retry loop at all. Switched to
+// piping stdout/stderr into the error (via encoding + no stdio override) and
+// echoing them manually, so both the race-detection regex and a human
+// watching the log still see bd's real output.
+function initFromJsonlWithRetry(repo, prefix, remoteUrl, attempts = 3, delayMs = 500) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        try {
+            const out = execBdSync(['init', '--from-jsonl', '--prefix', prefix, '--remote', remoteUrl, '--non-interactive'], {
+                cwd: repo,
+                encoding: 'utf-8',
+            });
+            if (out) process.stdout.write(out);
+            return;
+        } catch (err) {
+            const combined = `${err?.stdout ?? ''}${err?.stderr ?? ''}${err instanceof Error ? err.message : String(err)}`;
+            if (err?.stdout) process.stdout.write(err.stdout);
+            if (err?.stderr) process.stderr.write(err.stderr);
+            const isProbeRaceRefusal = /already has Dolt history/.test(combined);
+            if (!isProbeRaceRefusal || attempt === attempts) {
+                throw err;
+            }
+            console.warn(`[sandbox-seed] bd init dolt-remote-history probe raced a fresh directory (attempt ${attempt}/${attempts}), retrying in ${delayMs}ms...`);
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+        }
+    }
+}
+
 function main() {
     const args = parseArgs(process.argv.slice(2));
     const hostRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -144,13 +190,22 @@ function main() {
     // path `root`/`repo` used) makes `remote` canonicalize the same way as
     // everything else under `root`, closing the mismatch.
     mkdirSync(remote, { recursive: true });
+    // apra-fleet-4ipl: bd's dolt-remote-history probe runs `git ls-remote`
+    // against `remote` -- against a PLAIN directory (mkdirSync above, no git
+    // repo) that fails with "does not appear to be a git repository" (exit
+    // 128), not "no refs". A newer bd (confirmed: 1.3.0, likely since 1.2.1
+    // per this file's initFromJsonlWithRetry() comment) treats that failure
+    // conservatively as "assume history exists" and refuses --from-jsonl
+    // init -- deterministically, not a race (verified: all 3
+    // initFromJsonlWithRetry attempts fail identically once its detection
+    // regex is fixed to actually see bd's output). `git ls-remote` against a
+    // real (even empty) bare git repo instead exits 0 with no refs, which
+    // the probe can read unambiguously as "no Dolt history" -- so make
+    // `remote` an actual bare git repo instead of a bare directory.
+    execFileSync('git', ['init', '--bare', '-q', remote], { stdio: 'ignore' });
     const resolvedRemote = realpathSync(remote);
     const remoteUrl = pathToFileURL(resolvedRemote).href;
-    execBdSync(['init', '--from-jsonl', '--prefix', args.prefix, '--remote', remoteUrl, '--non-interactive'], {
-        cwd: repo,
-        stdio: 'inherit',
-        shell: true,
-    });
+    initFromJsonlWithRetry(repo, args.prefix, remoteUrl);
     execBdSync(['dolt', 'push'], { cwd: repo, stdio: 'inherit' });
     console.log(`[sandbox-seed] OK: seeded '${repo}' with sync.remote '${remoteUrl}' (all paths inside the sandbox root)`);
 }

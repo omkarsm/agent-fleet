@@ -1,6 +1,13 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { VCSModule, buildCreatePrCommand, buildCommentCommand, resolveProvider } from '../fleet-sprint/vcs-module.mjs';
+import { VCSModule, buildCreatePrCommand as rawBuildCreatePrCommand, buildCommentCommand as rawBuildCommentCommand, resolveProvider, PR_DESCRIPTION_MAX_LENGTH, getProviderTextLimits } from '../fleet-sprint/vcs-module.mjs';
+import { withPayloadPath, stagedJson, posixDataBinaryArg, POSIX_PAYLOAD_PATH, WINDOWS_PAYLOAD_PATH } from './helpers/vcs-payload-test.mjs';
+
+// Request bodies travel as a staged member-side file (curl --data-binary
+// @<path>), so every body-carrying builder needs a payload_path; these
+// wrappers supply the fixture path for the call's os.
+const buildCreatePrCommand = withPayloadPath(rawBuildCreatePrCommand);
+const buildCommentCommand = withPayloadPath(rawBuildCommentCommand);
 
 // apra-fleet-tfx.7: orchestrator-side VCSModule -- provider-dispatched
 // PR-creation command builder. Pure/deterministic: no network calls in this
@@ -31,12 +38,13 @@ describe('VCSModule.buildCreatePrCommand', () => {
             `-H 'Accept: application/vnd.github+json'`,
             `-H 'Content-Type: application/json'`,
             `-H 'X-GitHub-Api-Version: 2022-11-28'`,
-            `-d '${expectedPayload}'`,
+            posixDataBinaryArg(),
             `-w '\n%{http_code}'`,
             'https://api.github.com/repos/Apra-Labs/apra-fleet/pulls',
         ].join(' ');
 
         assert.strictEqual(result.command, expectedCommand);
+        assert.deepStrictEqual(result.payload, { path: POSIX_PAYLOAD_PATH, content: expectedPayload });
         assert.strictEqual(result.provider, 'github');
         assert.strictEqual(result.action, 'create-pull-request');
         assert.deepStrictEqual(result.interpret, {
@@ -44,6 +52,41 @@ describe('VCSModule.buildCreatePrCommand', () => {
             alreadyExistsStatus: 422,
             alreadyExistsPattern: 'already exists',
         });
+    });
+
+    test('doubles embedded single quotes (PowerShell-safe) when os is windows', () => {
+        const result = buildCreatePrCommand({
+            provider: 'github',
+            repo: 'Apra-Labs/apra-fleet',
+            base: 'main',
+            head: 'auto-sprint/feature-x',
+            title: "Fix doer's crash",
+            token: 'ghs_abcdef123456',
+            os: 'windows',
+        });
+
+        // The title travels in the staged JSON file, never on the PowerShell
+        // command line, so no quoting dialect can corrupt the apostrophe.
+        assert.strictEqual(stagedJson(result).title, "Fix doer's crash");
+        assert.ok(!result.command.includes('doer'), `the title must not appear on the command line: ${result.command}`);
+        assert.ok(result.command.includes(`--data-binary '@${WINDOWS_PAYLOAD_PATH}'`), result.command);
+    });
+
+    test('keeps POSIX close-reopen escaping when os is omitted or non-windows', () => {
+        const posixParams = {
+            provider: 'github',
+            repo: 'Apra-Labs/apra-fleet',
+            base: 'main',
+            head: 'auto-sprint/feature-x',
+            title: "Fix doer's crash",
+            token: 'ghs_abcdef123456',
+        };
+        const withoutOs = buildCreatePrCommand(posixParams);
+        const withLinux = buildCreatePrCommand({ ...posixParams, os: 'linux' });
+
+        assert.strictEqual(withoutOs.command, withLinux.command);
+        assert.strictEqual(stagedJson(withoutOs).title, "Fix doer's crash");
+        assert.ok(!withoutOs.command.includes('doer'));
     });
 
     test('omits body from the JSON payload when not supplied', () => {
@@ -55,7 +98,7 @@ describe('VCSModule.buildCreatePrCommand', () => {
             title: 'no body here',
             token: 'ghs_tok',
         });
-        assert.ok(!result.command.includes('"body"'));
+        assert.ok(!('body' in stagedJson(result)));
     });
 
     test('never echoes the raw token in logSafeCommand', () => {
@@ -147,6 +190,106 @@ describe('VCSModule.buildCreatePrCommand', () => {
         const b = buildCreatePrCommand(params);
         assert.deepStrictEqual(a, b);
     });
+
+    // Azure DevOps rejects/fails to raise a pull request whose description is
+    // too long, and the LLM role that drafts a PR description is only ever
+    // PROMPTED to respect a limit -- it can and does ignore that guidance. So
+    // buildCreatePrCommand() itself deterministically caps `body` at
+    // PR_DESCRIPTION_MAX_LENGTH, regardless of provider, and reports the
+    // truncation back via `descriptionTruncated` so the caller (runner.js's
+    // raiseVcsPrForMember) can log a warning.
+    describe('PR description length cap (PR_DESCRIPTION_MAX_LENGTH)', () => {
+        test('a description under the cap passes through unchanged with descriptionTruncated: null', () => {
+            const body = 'A'.repeat(PR_DESCRIPTION_MAX_LENGTH - 1);
+            const result = buildCreatePrCommand({
+                provider: 'github',
+                repo: 'Apra-Labs/apra-fleet',
+                base: 'main',
+                head: 'feature-x',
+                title: 'short body',
+                body,
+                token: 'ghs_tok',
+            });
+            assert.strictEqual(result.descriptionTruncated, null);
+            const payload = stagedJson(result);
+            assert.strictEqual(payload.body, body);
+        });
+
+        test('a description exactly at the cap passes through unchanged', () => {
+            const body = 'B'.repeat(PR_DESCRIPTION_MAX_LENGTH);
+            const result = buildCreatePrCommand({
+                provider: 'github',
+                repo: 'Apra-Labs/apra-fleet',
+                base: 'main',
+                head: 'feature-x',
+                title: 'exact-cap body',
+                body,
+                token: 'ghs_tok',
+            });
+            assert.strictEqual(result.descriptionTruncated, null);
+        });
+
+        test('GitHub: the cap is GitHub\'s own descriptionMaxLength, not the global fallback; over it the body is truncated and reported', () => {
+            const ghMax = getProviderTextLimits('github').descriptionMaxLength;
+            assert.ok(ghMax > PR_DESCRIPTION_MAX_LENGTH, 'GitHub declares a larger limit than the fallback');
+            const fits = buildCreatePrCommand({
+                provider: 'github', repo: 'Apra-Labs/apra-fleet', base: 'main', head: 'feature-x',
+                title: 'long body', body: 'C'.repeat(PR_DESCRIPTION_MAX_LENGTH + 250), token: 'ghs_tok',
+            });
+            assert.strictEqual(fits.descriptionTruncated, null, 'a body over the old global cap but within GitHub\'s limit is untouched');
+            const longBody = 'C'.repeat(ghMax + 250);
+            const result = buildCreatePrCommand({
+                provider: 'github',
+                repo: 'Apra-Labs/apra-fleet',
+                base: 'main',
+                head: 'feature-x',
+                title: 'long body',
+                body: longBody,
+                token: 'ghs_tok',
+            });
+            assert.deepStrictEqual(result.descriptionTruncated, {
+                originalLength: longBody.length,
+                maxLength: ghMax,
+            });
+            const payload = stagedJson(result);
+            assert.strictEqual(payload.body.length, ghMax);
+            assert.strictEqual(payload.body, longBody.slice(0, ghMax));
+        });
+
+        test('Azure DevOps: a description over the cap is truncated to exactly PR_DESCRIPTION_MAX_LENGTH chars and reported', () => {
+            const longBody = 'D'.repeat(PR_DESCRIPTION_MAX_LENGTH + 500);
+            const result = buildCreatePrCommand({
+                provider: 'azure-devops',
+                org: 'my-org',
+                project: 'my-project',
+                repo: 'my-repo',
+                base: 'main',
+                head: 'feature-x',
+                title: 'long body',
+                body: longBody,
+                token: 'pat-token',
+            });
+            assert.deepStrictEqual(result.descriptionTruncated, {
+                originalLength: longBody.length,
+                maxLength: PR_DESCRIPTION_MAX_LENGTH,
+            });
+            const payload = stagedJson(result);
+            assert.strictEqual(payload.description.length, PR_DESCRIPTION_MAX_LENGTH);
+            assert.strictEqual(payload.description, longBody.slice(0, PR_DESCRIPTION_MAX_LENGTH));
+        });
+
+        test('a missing/non-string body is left alone (no truncation attempted)', () => {
+            const result = buildCreatePrCommand({
+                provider: 'github',
+                repo: 'Apra-Labs/apra-fleet',
+                base: 'main',
+                head: 'feature-x',
+                title: 'no body',
+                token: 'ghs_tok',
+            });
+            assert.strictEqual(result.descriptionTruncated, null);
+        });
+    });
 });
 
 describe('VCSModule.buildCommentCommand', () => {
@@ -172,12 +315,336 @@ describe('VCSModule.buildCommentCommand', () => {
             (err) => err.message.startsWith('ERROR: VCSModule: '),
         );
     });
+
+    test('doubles embedded single quotes (PowerShell-safe) when os is windows', () => {
+        const result = buildCommentCommand({
+            provider: 'github',
+            repo: 'Apra-Labs/apra-fleet',
+            issue_number: 42,
+            body: "doer's step failed -- see run log.",
+            token: 'ghs_tok',
+            os: 'windows',
+        });
+        assert.strictEqual(stagedJson(result).body, "doer's step failed -- see run log.");
+        assert.ok(!result.command.includes('doer'));
+    });
+});
+
+// =============================================================================
+// apra-fleet-ot2z.17: golden Windows vs POSIX commands for
+// buildGitHubCreatePrCommand/buildGitHubCommentCommand, pinning the
+// apra-fleet-ot2z.16 fix (curl.exe on Windows to dodge PowerShell's built-in
+// `curl` -> Invoke-WebRequest alias) plus everything that fix must NOT
+// change: redaction parity, apostrophe quoting, and the interpret contract.
+// =============================================================================
+describe('VCSModule GitHub PR/comment builders: Windows-safe curl (apra-fleet-ot2z.17)', () => {
+    const prParams = {
+        provider: 'github',
+        repo: 'Apra-Labs/apra-fleet',
+        base: 'main',
+        head: 'auto-sprint/feature-x',
+        title: 'Auto-sprint: feature-x',
+        body: 'PASS -- see report',
+        token: 'ghs_abcdef123456',
+    };
+    const commentParams = {
+        provider: 'github',
+        repo: 'Apra-Labs/apra-fleet',
+        issue_number: 42,
+        body: 'Sprint aborted -- see run log.',
+        token: 'ghs_tok',
+    };
+
+    const prPayload = JSON.stringify({
+        title: 'Auto-sprint: feature-x',
+        head: 'auto-sprint/feature-x',
+        base: 'main',
+        body: 'PASS -- see report',
+    });
+    const commentPayload = JSON.stringify({ body: 'Sprint aborted -- see run log.' });
+
+    // Golden strings, item 1: pin the pre-existing POSIX shape (bare `curl`)
+    // as a true before/after regression pin -- these must stay byte-identical
+    // to what the suite already asserted for buildCreatePrCommand's default
+    // (os-omitted) case above, and to buildCommentCommand's os:'linux' case.
+    const expectedPrLinux = [
+        'curl -sS -X POST',
+        `-H 'Authorization: Bearer ghs_abcdef123456'`,
+        `-H 'Accept: application/vnd.github+json'`,
+        `-H 'Content-Type: application/json'`,
+        `-H 'X-GitHub-Api-Version: 2022-11-28'`,
+        posixDataBinaryArg(),
+        `-w '\n%{http_code}'`,
+        'https://api.github.com/repos/Apra-Labs/apra-fleet/pulls',
+    ].join(' ');
+    const expectedCommentLinux = [
+        'curl -sS -X POST',
+        `-H 'Authorization: Bearer ghs_tok'`,
+        `-H 'Accept: application/vnd.github+json'`,
+        `-H 'Content-Type: application/json'`,
+        `-H 'X-GitHub-Api-Version: 2022-11-28'`,
+        posixDataBinaryArg(),
+        `-w '\n%{http_code}'`,
+        'https://api.github.com/repos/Apra-Labs/apra-fleet/issues/42/comments',
+    ].join(' ');
+
+    // Golden strings, item 2: the Windows shape differs in the curl token
+    // (`curl.exe`, the real binary, not the PowerShell curl->Invoke-WebRequest
+    // alias) and in the staged body's path (a Windows path); the JSON body
+    // itself never reaches the command line on either OS. Headers carry no
+    // quotes and stay byte-identical.
+    const expectedPrWindows = expectedPrLinux
+        .replace(/^curl /, 'curl.exe ')
+        .replace(posixDataBinaryArg(), `--data-binary '@${WINDOWS_PAYLOAD_PATH}'`);
+    const expectedCommentWindows = expectedCommentLinux
+        .replace(/^curl /, 'curl.exe ')
+        .replace(posixDataBinaryArg(), `--data-binary '@${WINDOWS_PAYLOAD_PATH}'`);
+
+    // A bare `curl` token (not followed by `.exe`) is exactly what PowerShell
+    // aliases to Invoke-WebRequest -- assert it is categorically absent from
+    // the Windows command, word-boundary-anchored so `curl.exe` itself does
+    // not false-positive.
+    const BARE_CURL_RE = /\bcurl\b(?!\.exe)/;
+
+    describe('create-pull-request', () => {
+        test('golden POSIX command (os: linux) is unchanged by the curl.exe fix', () => {
+            const result = buildCreatePrCommand({ ...prParams, os: 'linux' });
+            assert.strictEqual(result.command, expectedPrLinux);
+            assert.strictEqual(result.payload.content, prPayload);
+        });
+
+        test('golden Windows command (os: windows) emits curl.exe, never a bare curl token', () => {
+            const result = buildCreatePrCommand({ ...prParams, os: 'windows' });
+            assert.strictEqual(result.command, expectedPrWindows);
+            assert.ok(!BARE_CURL_RE.test(result.command), `Expected no bare curl token in: ${result.command}`);
+            assert.ok(result.command.startsWith('curl.exe '));
+        });
+
+        test('redaction parity holds on both os branches', () => {
+            for (const os of ['linux', 'windows']) {
+                const result = buildCreatePrCommand({ ...prParams, os });
+                assert.ok(!result.logSafeCommand.includes('ghs_abcdef123456'), `os=${os}: raw token leaked into logSafeCommand`);
+                assert.ok(result.logSafeCommand.includes('***REDACTED***'), `os=${os}: expected the REDACTED literal`);
+                assert.strictEqual(
+                    result.logSafeCommand.replace('***REDACTED***', 'ghs_abcdef123456'),
+                    result.command,
+                    `os=${os}: logSafeCommand must equal command with only the token substring replaced`,
+                );
+            }
+        });
+
+        test('apostrophe in title/body still quotes correctly on Windows after the curl.exe change', () => {
+            const result = buildCreatePrCommand({
+                ...prParams,
+                title: "Fix doer's crash",
+                os: 'windows',
+            });
+            assert.ok(result.command.startsWith('curl.exe '));
+            assert.strictEqual(stagedJson(result).title, "Fix doer's crash");
+            assert.ok(!result.command.includes('doer'));
+        });
+
+        test('interpret contract (successStatusRange, alreadyExistsStatus, alreadyExistsPattern) is identical on both os branches', () => {
+            const linux = buildCreatePrCommand({ ...prParams, os: 'linux' });
+            const windows = buildCreatePrCommand({ ...prParams, os: 'windows' });
+            const expectedInterpret = {
+                successStatusRange: [200, 299],
+                alreadyExistsStatus: 422,
+                alreadyExistsPattern: 'already exists',
+            };
+            assert.deepStrictEqual(linux.interpret, expectedInterpret);
+            assert.deepStrictEqual(windows.interpret, expectedInterpret);
+            // The publish path parses the trailing HTTP status this -w flag
+            // appends; confirm the Windows command still carries it.
+            assert.ok(windows.command.includes(`-w '\n%{http_code}'`));
+        });
+    });
+
+    describe('comment', () => {
+        test('golden POSIX command (os: linux) is unchanged by the curl.exe fix', () => {
+            const result = buildCommentCommand({ ...commentParams, os: 'linux' });
+            assert.strictEqual(result.command, expectedCommentLinux);
+            assert.strictEqual(result.payload.content, commentPayload);
+        });
+
+        test('golden Windows command (os: windows) emits curl.exe, never a bare curl token', () => {
+            const result = buildCommentCommand({ ...commentParams, os: 'windows' });
+            assert.strictEqual(result.command, expectedCommentWindows);
+            assert.ok(!BARE_CURL_RE.test(result.command), `Expected no bare curl token in: ${result.command}`);
+            assert.ok(result.command.startsWith('curl.exe '));
+        });
+
+        test('redaction parity holds on both os branches', () => {
+            for (const os of ['linux', 'windows']) {
+                const result = buildCommentCommand({ ...commentParams, os });
+                assert.ok(!result.logSafeCommand.includes('ghs_tok'), `os=${os}: raw token leaked into logSafeCommand`);
+                assert.ok(result.logSafeCommand.includes('***REDACTED***'), `os=${os}: expected the REDACTED literal`);
+                assert.strictEqual(
+                    result.logSafeCommand.replace('***REDACTED***', 'ghs_tok'),
+                    result.command,
+                    `os=${os}: logSafeCommand must equal command with only the token substring replaced`,
+                );
+            }
+        });
+
+        test('apostrophe in body still quotes correctly on Windows after the curl.exe change', () => {
+            const result = buildCommentCommand({
+                ...commentParams,
+                body: "doer's step failed -- see run log.",
+                os: 'windows',
+            });
+            assert.ok(result.command.startsWith('curl.exe '));
+            assert.strictEqual(stagedJson(result).body, "doer's step failed -- see run log.");
+            assert.ok(!result.command.includes('doer'));
+        });
+
+        test('interpret contract (successStatusRange) is identical on both os branches', () => {
+            const linux = buildCommentCommand({ ...commentParams, os: 'linux' });
+            const windows = buildCommentCommand({ ...commentParams, os: 'windows' });
+            const expectedInterpret = { successStatusRange: [200, 299] };
+            assert.deepStrictEqual(linux.interpret, expectedInterpret);
+            assert.deepStrictEqual(windows.interpret, expectedInterpret);
+            assert.ok(windows.command.includes(`-w '\n%{http_code}'`));
+        });
+    });
+});
+
+// =============================================================================
+// Shell-vs-OS quoting matrix: shQuote must dispatch on the member's registered
+// SHELL, not the bare OS. A Windows member running Git-for-Windows bash needs
+// POSIX quoting ('\''); the PowerShell doubled-quote form ('') is read by bash
+// as close-then-reopen, silently deleting the apostrophe from the curl -d JSON
+// payload -- confirmed live as GitHub answering "HTTP 400: Problems parsing
+// JSON" on the create-PR endpoint. pwsh7/powershell5 and the unresolved-shell
+// ('') fallback on Windows must stay byte-identical to the historical os-only
+// behavior; non-Windows os must stay POSIX regardless of shell.
+// =============================================================================
+describe('VCSModule GitHub builders: quoting dialect follows the member shell, not the OS', () => {
+    const title = `Fix "it's broken"`;
+    const body = "the doer's step failed -- see run log";
+    const prParams = {
+        provider: 'github',
+        repo: 'Apra-Labs/apra-fleet',
+        base: 'main',
+        head: 'fix/quoting',
+        title,
+        body,
+        token: 'ghs_tok',
+    };
+    const commentParams = {
+        provider: 'github',
+        repo: 'Apra-Labs/apra-fleet',
+        issue_number: 7,
+        body,
+        token: 'ghs_tok',
+    };
+
+    // Recover the single argv word following ` -d ` under the given shell's
+    // single-quote rules, so the assertions below prove what the member's
+    // shell would actually hand to curl -- not just what substrings the
+    // command text contains.
+    //   posix:      '...' regions are literal; \x outside quotes escapes x
+    //               (covers the '\'' close-escape-reopen idiom).
+    //   powershell: inside a '...' region, '' is a literal single quote.
+    function parseShellWord(cmd, startIdx, dialect) {
+        let i = startIdx;
+        let out = '';
+        while (i < cmd.length && cmd[i] !== ' ') {
+            if (cmd[i] === "'") {
+                i += 1;
+                while (i < cmd.length) {
+                    if (cmd[i] === "'") {
+                        if (dialect === 'powershell' && cmd[i + 1] === "'") {
+                            out += "'";
+                            i += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    out += cmd[i];
+                    i += 1;
+                }
+                i += 1; // consume the closing quote
+            } else if (dialect === 'posix' && cmd[i] === '\\') {
+                out += cmd[i + 1];
+                i += 2;
+            } else {
+                out += cmd[i];
+                i += 1;
+            }
+        }
+        return out;
+    }
+
+    function extractDataBinaryArg(command, dialect) {
+        const idx = command.indexOf(' --data-binary ');
+        assert.notEqual(idx, -1, `expected a --data-binary flag in: ${command}`);
+        return parseShellWord(command, idx + ' --data-binary '.length, dialect);
+    }
+
+    // The JSON body is staged in a file, so the only quote-sensitive word
+    // left is the `@<path>` argument; the quoting dialect must still follow
+    // the member SHELL for it, and the staged JSON must be exact.
+    test('windows + gitbash: POSIX quoting -- the --data-binary word survives bash parsing as @<path>', () => {
+        const result = buildCreatePrCommand({ ...prParams, os: 'windows', shell: 'gitbash' });
+        // curl binary token stays OS-keyed: still curl.exe on Windows.
+        assert.ok(result.command.startsWith('curl.exe '), `expected curl.exe for a windows member, got: ${result.command}`);
+        assert.strictEqual(extractDataBinaryArg(result.command, 'posix'), `@${WINDOWS_PAYLOAD_PATH}`);
+        const parsed = stagedJson(result);
+        assert.strictEqual(parsed.title, title);
+        assert.strictEqual(parsed.body, body);
+    });
+
+    test('windows + gitbash: comment builder gets the same POSIX quoting', () => {
+        const result = buildCommentCommand({ ...commentParams, os: 'windows', shell: 'gitbash' });
+        assert.ok(result.command.startsWith('curl.exe '));
+        assert.strictEqual(extractDataBinaryArg(result.command, 'posix'), `@${WINDOWS_PAYLOAD_PATH}`);
+        assert.strictEqual(stagedJson(result).body, body);
+    });
+
+    test('a payload path carrying an apostrophe is quoted in the member shell dialect', () => {
+        const p = "/home/o'brien/repo/.apra-call/x.json";
+        const posix = buildCreatePrCommand({ ...prParams, os: 'linux', payload_path: p });
+        assert.strictEqual(extractDataBinaryArg(posix.command, 'posix'), `@${p}`);
+        const wp = "C:\\Users\\o'brien\\repo\\.apra-call\\x.json";
+        const ps = buildCreatePrCommand({ ...prParams, os: 'windows', shell: 'powershell5', payload_path: wp });
+        assert.ok(ps.command.includes("o''brien"), ps.command);
+        assert.strictEqual(extractDataBinaryArg(ps.command, 'powershell'), `@${wp}`);
+    });
+
+    test('windows + pwsh7/powershell5: byte-identical to the os-only windows output', () => {
+        const legacy = buildCreatePrCommand({ ...prParams, os: 'windows' });
+        assert.strictEqual(extractDataBinaryArg(legacy.command, 'powershell'), `@${WINDOWS_PAYLOAD_PATH}`);
+        for (const shell of ['pwsh7', 'powershell5']) {
+            const result = buildCreatePrCommand({ ...prParams, os: 'windows', shell });
+            assert.strictEqual(result.command, legacy.command, `shell=${shell} must keep the PowerShell shape byte-identical`);
+            const comment = buildCommentCommand({ ...commentParams, os: 'windows', shell });
+            assert.strictEqual(comment.command, buildCommentCommand({ ...commentParams, os: 'windows' }).command, `shell=${shell} comment builder must keep the PowerShell shape byte-identical`);
+        }
+        const parsed = stagedJson(legacy);
+        assert.strictEqual(parsed.title, title);
+        assert.strictEqual(parsed.body, body);
+    });
+
+    test('windows + unresolved shell (empty string / undefined) keeps the PowerShell-dialect fallback unchanged', () => {
+        const legacy = buildCreatePrCommand({ ...prParams, os: 'windows' });
+        const withEmpty = buildCreatePrCommand({ ...prParams, os: 'windows', shell: '' });
+        assert.strictEqual(withEmpty.command, legacy.command, 'an unresolved shell on Windows must degrade to the PowerShell dialect, not to POSIX');
+        assert.strictEqual(buildCommentCommand({ ...commentParams, os: 'windows', shell: '' }).command, buildCommentCommand({ ...commentParams, os: 'windows' }).command);
+    });
+
+    test('non-windows os stays POSIX regardless of shell', () => {
+        const bare = buildCreatePrCommand({ ...prParams, os: 'linux' });
+        assert.strictEqual(buildCreatePrCommand({ ...prParams, os: 'linux', shell: '' }).command, bare.command);
+        assert.strictEqual(extractDataBinaryArg(bare.command, 'posix'), `@${POSIX_PAYLOAD_PATH}`);
+        assert.strictEqual(stagedJson(bare).title, title);
+    });
 });
 
 describe('VCSModule default export', () => {
     test('exposes the same builders as the named exports', () => {
-        assert.strictEqual(VCSModule.buildCreatePrCommand, buildCreatePrCommand);
-        assert.strictEqual(VCSModule.buildCommentCommand, buildCommentCommand);
+        assert.strictEqual(VCSModule.buildCreatePrCommand, rawBuildCreatePrCommand);
+        assert.strictEqual(VCSModule.buildCommentCommand, rawBuildCommentCommand);
         assert.strictEqual(VCSModule.resolveProvider, resolveProvider);
     });
 });

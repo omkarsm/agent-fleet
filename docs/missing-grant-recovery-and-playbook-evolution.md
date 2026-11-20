@@ -3,7 +3,7 @@
 ## Status
 Proposed (2026-08-05). Revised 2026-08-05 after design review -- see `## Revision Notes` at the end for what changed and why.
 
-Nothing in this document is implemented yet, with one exception noted inline: the AGY half of the translation layer (`convertClaudeAllowToAgyPermissions` -> `.gemini/antigravity-cli/settings.json`) already exists. Everything else is a target design.
+Nothing in this document is implemented yet, with exceptions noted inline: the AGY half of the translation layer already exists (grants are written into the member's own agy project), and AGY's structured refusal is already reported as `execute_prompt` reason `permission_denied` (see `docs/agy-provider.md`). Everything else is a target design.
 
 ## Related Documents
 - `docs/auto-sprint-permission-diff-safety-block.md` (Auto-sprint permission diff safety & non-self-granting workflow rule)
@@ -38,7 +38,7 @@ It is tempting to read the problem as "the category list is wrong". The deeper d
 ## Architecture & Core Principles
 
 ### 1. Multi-Provider Unified Permission Abstraction (`grantsNeeded`)
-Fleet provides a single, unified permission abstraction layer across **all LLM providers (Claude, AGY, Codex, OpenCode, Gemini, Copilot)**.
+Fleet provides a single, unified permission abstraction layer across **all LLM providers (Claude, AGY, Codex, OpenCode, Copilot)**.
 
 Callers and workflows interact strictly using Fleet's standard **Claude permission vocabulary** -- which means the vocabulary already used by `skills/fleet/profiles/*.json` and by Claude itself, not a new dialect:
 - `Bash(<cmd>:*)` (e.g., `Bash(git:*)`, `Bash(docker:*)`, `Bash(cargo:*)`)
@@ -52,7 +52,7 @@ Note that these are the real tool names. An earlier draft of this document inven
 
 `compose_permissions` accepts this unified language and handles provider-specific translation internally for each provider:
 - **Claude**: Writes to `.claude/settings.local.json` (and seeds workspace trust in `~/.claude.json`).
-- **AGY**: Translates via `convertClaudeAllowToAgyPermissions` and writes to `.gemini/antigravity-cli/settings.json`. *(Implemented today.)*
+- **AGY**: Translates to agy rules and writes them into the member's own agy project, `~/.gemini/config/projects/<agyProjectId>.json` (see `docs/agy-provider.md`). *(Implemented today.)*
 - **Codex / OpenCode / Copilot**: See the expressiveness limits below -- these providers do not have an allowlist model, and pretending they do is a design error.
 
 #### 1.1 Translation rules (normative)
@@ -68,7 +68,6 @@ The three provider permission models are not the same shape, and the design must
 | :--- | :--- | :--- |
 | Claude | tool + argument pattern, `allow`/`deny`/`ask` in a settings file | Yes |
 | AGY | `{action, target}` rule list in a settings file | Yes |
-| Gemini | flag-gated (`--yolo`) plus MCP server allowlist | Partially |
 | Codex | sandbox mode + approval policy (`--sandbox`, `--ask-for-approval`) -- **no per-command allowlist exists** | No |
 | OpenCode | approval flag only | No |
 | Copilot | approval flag only | No |
@@ -82,7 +81,7 @@ All provider adapters reverse their respective CLI block signatures into Fleet's
 The organizing question is not "which layer refused" -- that is an implementation detail Fleet often cannot determine reliably from text. The organizing question is **"who can fix this, and with what action?"** That is the only thing the caller can act on, and it is what determines whether a retry, a grant, a playbook diff, or a human on the host is the correct next step.
 
 - **Category A: `missing_grant` (LLM CLI gate block)**
-  - *Definition*: The LLM CLI refused to execute a tool because it is not permissioned in LLM settings (`.claude/settings.local.json` / `.gemini/antigravity-cli/settings.json`).
+  - *Definition*: The LLM CLI refused to execute a tool because it is not permissioned in LLM settings (`.claude/settings.local.json` / the member's agy project file).
   - *Detection*: Positive identification from the provider's **structured refusal event** only (see 1.A below). Never inferred from free text.
   - *Remediation*: Fleet can fix it by writing a config it owns -- `compose_permissions`, gated on the playbook permission contract and human approval.
   - *Retryable*: No, not until the grant is applied AND verified.
@@ -254,8 +253,8 @@ This is worth doing independently of this proposal. It is worth more given that 
 Writing a grant is not the same as the grant taking effect. This section exists because the `workspace_not_trusted` history proves the gap is real.
 
 1. **Trust before grant.** `seedWorkspaceTrust` runs first. A grant written to an untrusted workspace is silently discarded by Claude.
-2. **Verify after grant.** After applying, confirm the config on the member reflects the intended rule set. "Wrote the file" is not "the CLI honors it".
-3. **Concurrency.** `deliverConfigFile` is an unlocked read-modify-write. Two concurrent composes against one member will silently drop one another's changes, and JSON array fields are replaced rather than merged, so a reactive grant can narrow a member's permission set to only the newly granted rules. Grant application needs a per-member lock and an explicit array-merge policy.
+2. **Verify after grant -- write-level, implemented.** `deliverConfigFile` inspects the exit code of both the `mkdir`/`New-Item` and the write command, and then re-reads the file back and structurally compares it against the intended merged content (order-independent key comparison for JSON, substring match for TOML/string payloads) before treating the delivery as successful. A nonzero exit code or a mismatched read-back raises a typed delivery error; the caller returns an explicit failure string and skips the permissions ledger update -- a failed or no-op write can no longer be reported as a successful grant. This closes the write-level half of the gap ("did the bytes land"). It does **not** close the CLI-honoring half: "wrote the file correctly" is still not the same guarantee as "the CLI reads and applies it" (see the `workspace_not_trusted` case above, where a syntactically correct file is present but the CLI ignores it because the workspace isn't trusted). Verifying CLI-level uptake would require driving the actual provider CLI, which is out of scope for `compose_permissions` itself.
+3. **Concurrency.** `deliverConfigFile` is an unlocked read-modify-write. Two concurrent composes against one member will silently drop one another's changes, and JSON array fields are replaced rather than merged, so a reactive grant can narrow a member's permission set to only the newly granted rules. Grant application needs a per-member lock and an explicit array-merge policy. (Still open -- the write-level verification added above detects a lost-update after the fact via the read-back mismatch, but does not prevent the race.)
 4. **Session resume.** CLIs read settings at process start. A grant applied while a session is live may not take effect until a fresh session, so "grant then resume the same session" can loop forever. Define the expected behavior: apply grant -> require a fresh session -> retry once.
 5. **Windows delivery.** The PowerShell write path performs naive single-quote doubling. Grant strings now originate from model-influenced text, so escaping requirements must be explicit on both OS paths.
 

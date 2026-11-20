@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveModelForTier } from '../src/tools/execute-prompt.js';
-import { makeTestAgent, backupAndResetRegistry, restoreRegistry } from './test-helpers.js';
+import { makeTestAgent, backupAndResetRegistry, restoreRegistry, makeConfigAwareExec } from './test-helpers.js';
 import { addAgent, getAgent, getAllAgents } from '../src/services/registry.js';
 import { executePrompt } from '../src/tools/execute-prompt.js';
 import { registerMember } from '../src/tools/register-member.js';
@@ -23,6 +23,11 @@ vi.mock('../src/services/strategy.js', () => ({
     execCommand: mockExecCommand,
     testConnection: mockTestConnection,
     transferFiles: vi.fn(),
+    // The owner-only secret-file channel every real strategy has: an opencode
+    // member's per-folder entry carries the member access secret, so it is
+    // staged here and moved into place (never written through a command).
+    writeSecretFile: vi.fn(async (name: string) => `/tmp/${name}`),
+    removeSecretFile: vi.fn(async () => undefined),
     close: vi.fn(),
   }),
 }));
@@ -229,7 +234,7 @@ describe('register_member model_tiers normalization', () => {
     backupAndResetRegistry();
     vi.clearAllMocks();
     mockTestConnection.mockResolvedValue({ ok: true, latencyMs: 5 });
-    mockExecCommand.mockResolvedValue({ stdout: 'Linux', stderr: '', code: 0 });
+    mockExecCommand.mockImplementation(makeConfigAwareExec());
   });
 
   afterEach(() => {
@@ -332,7 +337,7 @@ describe('update_member model_tiers normalization', () => {
     backupAndResetRegistry();
     vi.clearAllMocks();
     mockTestConnection.mockResolvedValue({ ok: true, latencyMs: 5 });
-    mockExecCommand.mockResolvedValue({ stdout: 'Linux', stderr: '', code: 0 });
+    mockExecCommand.mockImplementation(makeConfigAwareExec());
   });
 
   afterEach(() => {

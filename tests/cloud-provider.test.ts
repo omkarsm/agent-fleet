@@ -221,13 +221,20 @@ describe('AwsCloudProvider - input validation', () => {
 
 import { registerMember } from '../src/tools/register-member.js';
 import { addAgent } from '../src/services/registry.js';
-import { makeTestAgent, backupAndResetRegistry, restoreRegistry } from './test-helpers.js';
+import { makeTestAgent, backupAndResetRegistry, restoreRegistry, makeConfigAwareExec } from './test-helpers.js';
+
+// Hoisted so the vi.mock factory (which runs before imports) can bind it; the
+// actual implementation is installed in beforeEach so compose_permissions'
+// config writes verifiably round-trip (apra-fleet-k4sc read-back verification).
+const { mockCloudExec } = vi.hoisted(() => ({ mockCloudExec: vi.fn() }));
 
 vi.mock('../src/services/strategy.js', () => ({
   getStrategy: () => ({
-    execCommand: vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 }),
+    execCommand: mockCloudExec,
     testConnection: vi.fn().mockResolvedValue({ ok: true, latencyMs: 5 }),
-    transferFiles: vi.fn(),
+    transferFiles: async (paths: string[]) => ({ success: paths, failed: [] }),
+    writeSecretFile: async () => '/home/testuser/.apra-fleet-secret',
+    removeSecretFile: async () => undefined,
     close: vi.fn(),
   }),
 }));
@@ -260,6 +267,7 @@ vi.mock('../src/services/cloud/aws.js', async (importOriginal) => {
 beforeEach(() => {
   backupAndResetRegistry();
   vi.clearAllMocks();
+  mockCloudExec.mockImplementation(makeConfigAwareExec(''));
 });
 
 afterEach(() => {

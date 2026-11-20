@@ -1,5 +1,5 @@
 // =============================================================================
-// Auto-sprint supervisor -- HTTP server skeleton (Plan Part 2.1, process model B)
+// fleet-sprint supervisor -- HTTP server skeleton (Plan Part 2.1, process model B)
 // =============================================================================
 //
 // This module stands up the always-on `fleet-se serve` supervisor process.
@@ -39,9 +39,33 @@
 // =============================================================================
 
 import http from 'node:http';
+import { toBeadsSummary } from './beads-identity.mjs';
+import { checkMutatingRequest, checkRequestHost, parseAllowedHosts } from '@apralabs/apra-fleet-workflow/viewer/request-guard';
+
+/**
+ * Environment variable holding the optional supervisor API token. When set
+ * (non-empty), a mutating request carrying `Authorization: Bearer <token>` (or
+ * `X-Fleet-Token: <token>`) is admitted even from a cross-site Origin. Unset,
+ * only same-origin / Origin-less JSON requests reach a mutating route.
+ */
+export const SUPERVISOR_TOKEN_ENV = 'FLEET_SUPERVISOR_TOKEN';
+
+/**
+ * Env var listing extra Host names (comma/space separated) the supervisor
+ * answers to, beyond loopback names, IP literals and its --host. Needed only
+ * for an off-box bind reached by DNS name (DNS-rebinding defence, see
+ * request-guard.mjs checkRequestHost()).
+ */
+export const SUPERVISOR_ALLOWED_HOSTS_ENV = 'FLEET_SUPERVISOR_ALLOWED_HOSTS';
 
 /** Default HTTP service port for the always-on supervisor. */
 export const DEFAULT_SERVICE_PORT = 8787;
+
+/**
+ * Default bind host: loopback only. Off-box exposure is an explicit opt-in via
+ * the `host` dep (`fleet-se serve --host <addr>`).
+ */
+export const DEFAULT_SERVICE_HOST = '127.0.0.1';
 
 /**
  * An inert seam stub. Later eft tasks pass real implementations; until then the
@@ -59,6 +83,21 @@ export function makeSeamStub(name) {
 }
 
 /**
+ * A request body the supervisor refuses: unparseable JSON (400) or over the
+ * size cap (413). Thrown by readJsonBody; the request catch-all maps it to a
+ * `{ error, field: 'body' }` answer with this status and no stack text.
+ */
+export class RequestBodyError extends Error {
+    /** @param {string} message @param {400|413} status */
+    constructor(message, status) {
+        super(message);
+        this.name = 'RequestBodyError';
+        this.status = status;
+        this.field = 'body';
+    }
+}
+
+/**
  * Reads and JSON-parses a request body with a hard size cap so a hostile or
  * buggy client cannot exhaust memory. Returns `undefined` for an empty body.
  * @param {import('http').IncomingMessage} req
@@ -67,19 +106,37 @@ export function makeSeamStub(name) {
  */
 export function readJsonBody(req, opts = {}) {
     const maxBytes = opts.maxBytes ?? 1_000_000;
+    // Past the cap the rest of the body is discarded up to this many more
+    // bytes and the 413 is answered at 'end', so a client that sends a
+    // moderately oversized body reads the 413 before the connection closes
+    // (closing on unread data sends a reset that can overtake the answer).
+    // Past the budget the 413 is answered at once and the connection closed.
+    const drainBytes = opts.drainBytes ?? maxBytes;
     return new Promise((resolve, reject) => {
         let size = 0;
+        let tooLarge = false;
+        let settled = false;
         const chunks = [];
+        const tooLargeError = () => new RequestBodyError(`request body exceeds ${maxBytes} byte limit`, 413);
         req.on('data', (chunk) => {
             size += chunk.length;
+            if (tooLarge) {
+                if (!settled && size > maxBytes + drainBytes) { settled = true; reject(tooLargeError()); }
+                return;
+            }
             if (size > maxBytes) {
-                reject(new Error(`request body exceeds ${maxBytes} byte limit`));
-                req.destroy();
+                tooLarge = true;
+                chunks.length = 0;
+                if (size > maxBytes + drainBytes) { settled = true; reject(tooLargeError()); }
                 return;
             }
             chunks.push(chunk);
         });
         req.on('end', () => {
+            if (tooLarge) {
+                if (!settled) { settled = true; reject(tooLargeError()); }
+                return;
+            }
             const raw = Buffer.concat(chunks).toString('utf-8').trim();
             if (raw.length === 0) {
                 resolve(undefined);
@@ -88,11 +145,52 @@ export function readJsonBody(req, opts = {}) {
             try {
                 resolve(JSON.parse(raw));
             } catch (err) {
-                reject(new Error(`invalid JSON request body: ${err.message}`));
+                reject(new RequestBodyError(`invalid JSON request body: ${err.message}`, 400));
             }
         });
         req.on('error', reject);
     });
+}
+
+/**
+ * Cuts stack-frame lines out of an error message. Linear: one pass over the
+ * lines, no regex over the whole string. A frame line is one that starts with
+ * "at " and looks like a frame (has "(" or a .js/.mjs/.ts file:line location).
+ * Everything from the first frame line onward is dropped.
+ * @param {any} v an Error, string or other value
+ * @returns {string}
+ */
+export function messageWithoutStack(v) {
+    const text = v instanceof Error ? v.message : typeof v === 'string' ? v : String(v);
+    let start = 0;
+    while (start <= text.length) {
+        let end = text.indexOf('\n', start);
+        if (end === -1) end = text.length;
+        const line = text.slice(start, end).trim();
+        if (line.startsWith('at ') && (line.includes('(') || /\.(?:mjs|cjs|js|ts):\d/.test(line))) {
+            return text.slice(0, start).trimEnd();
+        }
+        start = end + 1;
+    }
+    return text;
+}
+
+/**
+ * Error responses (status >= 400) must carry a message only, never a stack
+ * trace: the `error` field is reduced to its message and any `stack` key is
+ * dropped. Success payloads are never touched.
+ * @param {any} payload
+ */
+function sanitizeErrorPayload(payload) {
+    if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+    const out = { ...payload };
+    delete out.stack;
+    if ('error' in out && out.error !== undefined && out.error !== null && typeof out.error !== 'object') {
+        out.error = messageWithoutStack(out.error);
+    } else if (out.error instanceof Error) {
+        out.error = messageWithoutStack(out.error);
+    }
+    return out;
 }
 
 /**
@@ -103,7 +201,7 @@ export function readJsonBody(req, opts = {}) {
  * @param {any} payload
  */
 export function sendJson(res, status, payload) {
-    const body = JSON.stringify(payload ?? {});
+    const body = JSON.stringify((status >= 400 ? sanitizeErrorPayload(payload) : payload) ?? {});
     res.writeHead(status, {
         'content-type': 'application/json; charset=utf-8',
         'content-length': Buffer.byteLength(body),
@@ -122,9 +220,22 @@ export function sendJson(res, status, payload) {
  *   spawner?: object,
  *   watchdog?: object,
  *   dashboard?: object,
+ *   beadsIdentity?: { get: () => object|null, refresh: () => Promise<object> },
+ *   backlogMember?: { get: () => { member: object|null, status: string, reason: string|null } },
  *   logger?: { log?: Function, error?: Function },
  *   createServer?: (handler: (req: any, res: any) => void) => import('http').Server,
+ *   apiToken?: string|null,
+ *   host?: string,
+ *   allowedHosts?: string[]|string|null,
  * }} [deps]
+ *
+ * `apiToken`: the token that admits a cross-site mutating request (see
+ * request-guard.mjs). Defaults to process.env[SUPERVISOR_TOKEN_ENV]; pass null
+ * to disable the token mechanism explicitly.
+ *
+ * `allowedHosts`: extra Host header names admitted besides loopback names, IP
+ * literals and `host` itself (DNS-rebinding defence). Defaults to
+ * process.env[SUPERVISOR_ALLOWED_HOSTS_ENV].
  * @returns {{
  *   route(method: string, path: string, handler: Function): void,
  *   start(): Promise<{ port: number }>,
@@ -137,9 +248,26 @@ export function sendJson(res, status, payload) {
  */
 export function createSupervisor(deps = {}) {
     let port = Number.isInteger(deps.port) ? deps.port : DEFAULT_SERVICE_PORT;
+    const apiToken = deps.apiToken !== undefined ? deps.apiToken : (process.env[SUPERVISOR_TOKEN_ENV] || null);
+    const host = (typeof deps.host === 'string' && deps.host) ? deps.host : DEFAULT_SERVICE_HOST;
+    const allowedHosts = parseAllowedHosts(deps.allowedHosts !== undefined ? deps.allowedHosts : process.env[SUPERVISOR_ALLOWED_HOSTS_ENV]);
     const logger = deps.logger ?? console;
     const log = (...a) => logger.log?.(...a);
     const logError = (...a) => (logger.error ?? logger.log)?.(...a);
+    // Optional beads-identity handle (bin/serve.mjs wires the real one);
+    // read by GET /api/health below. Not a seam: it has no start()/stop().
+    const beadsIdentity = deps.beadsIdentity && typeof deps.beadsIdentity.get === 'function' ? deps.beadsIdentity : null;
+    // The "identity unknown" warning (getWarning() is optional on the handle
+    // so an older/test-only { get, refresh } stub still works).
+    const beadsWarningOf = (h) => (h && typeof h.getWarning === 'function' && !h.get() ? (h.getWarning() || null) : null);
+    // Optional backlog-member state handle (src/supervisor/backlog-member.mjs,
+    // wired by bin/serve.mjs); surfaced on GET /api/health as `backlogMember`
+    // only when wired, so an unwired health answer is unchanged.
+    const backlogMember = deps.backlogMember && typeof deps.backlogMember.get === 'function' ? deps.backlogMember : null;
+    const backlogMemberSummary = () => {
+        const st = backlogMember.get();
+        return { status: st.status, name: st.member ? st.member.name : null, reason: st.reason ?? null };
+    };
 
     // Module seams -- inert stubs unless a real collaborator was injected.
     const seams = {
@@ -156,6 +284,11 @@ export function createSupervisor(deps = {}) {
         // their own register*Routes() helpers (see bin/serve.mjs).
         doltMutex: deps.doltMutex ?? makeSeamStub('doltMutex'),
         idAllocator: deps.idAllocator ?? makeSeamStub('idAllocator'),
+        // docs/dolt-sync-redesign.md Part 3.3: the backstop for the one case
+        // settle's own try/finally teardown cannot cover -- an orchestrator
+        // process killed mid-settle, leaving a detached ephemeral
+        // `dolt sql-server` holding a member's beads data-dir lock.
+        doltOrphanSweep: deps.doltOrphanSweep ?? makeSeamStub('doltOrphanSweep'),
     };
 
     /** @type {Map<string, Function>} keyed by `METHOD path` (exact paths). */
@@ -226,6 +359,23 @@ export function createSupervisor(deps = {}) {
         const path = url.pathname;
 
         try {
+            // Cross-site request forgery guard: every mutating (non-GET/HEAD/
+            // OPTIONS) request must be JSON and same-origin (or carry the
+            // configured token) BEFORE any route handler runs -- one check here
+            // covers every route registered through route(), including those
+            // added by api.mjs, reconcile.mjs, proxy.mjs, the dolt mutex and
+            // the id allocator.
+            //
+            // The Host header is checked on EVERY request first (GET too): a
+            // DNS-rebound page controls both Origin and Host, so an origin
+            // comparison alone admits it, and it could also read GET routes.
+            const guardOpts = { token: apiToken, bindHost: host, allowedHosts, allowedHostsHint: `start the supervisor with --allowed-host <name> or set ${SUPERVISOR_ALLOWED_HOSTS_ENV}=<name>` };
+            const refused = checkRequestHost(req, guardOpts) || checkMutatingRequest(req, guardOpts);
+            if (refused) {
+                if (typeof req.resume === 'function') req.resume();
+                sendJson(res, refused.status, { error: refused.error });
+                return;
+            }
             const handler = routes.get(routeKey(method, path));
             if (handler) {
                 await handler(req, res, { url, params: {} });
@@ -238,6 +388,22 @@ export function createSupervisor(deps = {}) {
             }
             await matched.handler(req, res, { url, params: matched.params });
         } catch (err) {
+            if (err instanceof RequestBodyError) {
+                // Client error, not a supervisor fault: no stack, no 500.
+                // Close the connection once the answer is flushed: after a
+                // 413 the client may still be writing (or never stop), and
+                // the rest of that body must not be drained without bound.
+                const sock = req.socket;
+                // destroySoon: flush any pending write (the answer), then destroy.
+                const closeSocket = () => { if (sock && !sock.destroyed) sock.destroySoon(); };
+                if (res.writableFinished) closeSocket();
+                else res.once('finish', closeSocket);
+                if (!res.headersSent) {
+                    res.setHeader('Connection', 'close');
+                    sendJson(res, err.status, { error: err.message, field: 'body' });
+                } else { try { res.end(); } catch { /* already gone */ } }
+                return;
+            }
             // Isolate the failure: log it, answer 500 if we still can, and
             // keep the process alive.
             logError(`[supervisor] request ${method} ${path} failed:`, err && err.stack ? err.stack : err);
@@ -253,7 +419,26 @@ export function createSupervisor(deps = {}) {
 
     // GET /api/health -- liveness probe; confirms the supervisor is up and
     // reports which seams are still inert stubs.
-    route('GET', '/api/health', async (req, res) => {
+    //
+    // `beads` is the .beads identity this process resolved at startup
+    // (src/supervisor/beads-identity.mjs; { dir, prefix, syncRemote,
+    // repoRemote }, or null when no beadsIdentity dep was wired -- tests,
+    // the inert skeleton -- or when the identity is UNKNOWN: no .beads was
+    // found, or its probe failed; then `beadsWarning` carries the reason
+    // and the fix). `?refresh=1` re-runs the probes first; a probe failure
+    // keeps the last good identity and is reported as `beadsRefreshError`
+    // rather than failing the liveness answer.
+    route('GET', '/api/health', async (req, res, ctx) => {
+        let beadsRefreshError;
+        const refresh = ctx && ctx.url ? ctx.url.searchParams.get('refresh') : null;
+        if (beadsIdentity && refresh && refresh !== '0' && refresh !== 'false') {
+            try {
+                await beadsIdentity.refresh();
+            } catch (err) {
+                beadsRefreshError = err && err.message ? err.message : String(err);
+                logError('[supervisor] beads identity refresh failed:', beadsRefreshError);
+            }
+        }
         sendJson(res, 200, {
             status: 'ok',
             uptimeSeconds: Math.round(process.uptime()),
@@ -261,6 +446,10 @@ export function createSupervisor(deps = {}) {
             seams: Object.fromEntries(
                 Object.entries(seams).map(([k, v]) => [k, v.name ?? 'wired']),
             ),
+            beads: beadsIdentity ? toBeadsSummary(beadsIdentity.get()) : null,
+            ...(beadsWarningOf(beadsIdentity) ? { beadsWarning: beadsWarningOf(beadsIdentity) } : {}),
+            ...(beadsRefreshError !== undefined ? { beadsRefreshError } : {}),
+            ...(backlogMember ? { backlogMember: backlogMemberSummary() } : {}),
         });
     });
 
@@ -272,7 +461,44 @@ export function createSupervisor(deps = {}) {
         setImmediate(() => { stop('http:/api/shutdown').catch((e) => logError(e)); });
     });
 
+    // Shutdown bounds. A seam whose stop() never settles (or an SSE/keep-alive
+    // connection that keeps server.close() from completing) must not keep the
+    // process alive: each seam gets its own bound, and a forced exit fires a
+    // fixed time after shutdown starts (unref'd, so it never itself holds the
+    // process open). forcedExitMs 0 disables the forced exit (library/tests).
+    const seamStopTimeoutMs = Number.isFinite(deps.seamStopTimeoutMs) && deps.seamStopTimeoutMs > 0 ? deps.seamStopTimeoutMs : 3000;
+    const forcedExitMs = Number.isFinite(deps.forcedExitMs) && deps.forcedExitMs > 0 ? deps.forcedExitMs : 0;
+    const exitFn = deps.exit ?? ((code) => process.exit(code));
+    /** @type {string[]} */
+    const hungSeams = [];
+
+    /** Resolves 'done' | 'timeout' | 'error'; never rejects, never hangs past ms. */
+    function boundedStop(name, fn, ms) {
+        return new Promise((resolve) => {
+            let settled = false;
+            const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                hungSeams.push(name);
+                logError(`[supervisor] shutdown: ${name} did not stop within ${ms}ms (hung); continuing without it`);
+                resolve('timeout');
+            }, ms);
+            Promise.resolve().then(fn).then(
+                () => { if (!settled) { settled = true; clearTimeout(timer); resolve('done'); } },
+                (err) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    logError(`[supervisor] seam ${name} stop failed:`, err);
+                    resolve('error');
+                },
+            );
+        });
+    }
+
     let stopping = null;
+    let stopReason = null;
+    let forcedExit = false;
     /**
      * Idempotent teardown: close the HTTP server and stop every seam, then
      * resolve `shutdownRequested`. Safe to call more than once.
@@ -280,16 +506,29 @@ export function createSupervisor(deps = {}) {
      */
     function stop(reason = 'explicit') {
         if (stopping) return stopping;
+        stopReason = reason;
         stopping = (async () => {
             log(`[supervisor] shutting down (${reason})`);
-            await new Promise((resolve) => {
+            if (forcedExitMs > 0) {
+                const forced = setTimeout(() => {
+                    logError(`[supervisor] shutdown did not complete within ${forcedExitMs}ms; forcing exit. Hung: ${hungSeams.length ? hungSeams.join(', ') : '(none recorded; still stopping a seam or closing the http server)'}`);
+                    forcedExit = true;
+                    exitFn(0);
+                }, forcedExitMs);
+                if (typeof forced.unref === 'function') forced.unref();
+            }
+            await boundedStop('http-server', () => new Promise((resolve) => {
                 if (!server || !server.listening) { resolve(); return; }
                 server.close(() => resolve());
-            });
+                // Long-lived SSE / keep-alive connections would otherwise keep
+                // close() from ever completing.
+                if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+            }), seamStopTimeoutMs);
             // Stop seams in reverse of a natural start order; isolate each so
-            // one failing seam cannot block the others' teardown.
-            for (const seam of [seams.idAllocator, seams.doltMutex, seams.dashboard, seams.watchdog, seams.spawner, seams.ledger]) {
-                try { await seam.stop?.(); } catch (err) { logError(`[supervisor] seam ${seam.name ?? ''} stop failed:`, err); }
+            // one failing or hung seam cannot block the others' teardown.
+            const ordered = [['doltOrphanSweep', seams.doltOrphanSweep], ['idAllocator', seams.idAllocator], ['doltMutex', seams.doltMutex], ['dashboard', seams.dashboard], ['watchdog', seams.watchdog], ['spawner', seams.spawner], ['ledger', seams.ledger]];
+            for (const [key, seam] of ordered) {
+                await boundedStop(seam.name ?? key, () => seam.stop?.(), seamStopTimeoutMs);
             }
             shutdownResolve();
         })();
@@ -303,7 +542,7 @@ export function createSupervisor(deps = {}) {
     async function start() {
         // Start seams first so the API never serves before its collaborators
         // are ready. Stubs are no-ops.
-        for (const seam of [seams.ledger, seams.spawner, seams.watchdog, seams.dashboard, seams.doltMutex, seams.idAllocator]) {
+        for (const seam of [seams.ledger, seams.spawner, seams.watchdog, seams.dashboard, seams.doltMutex, seams.idAllocator, seams.doltOrphanSweep]) {
             await seam.start?.();
         }
 
@@ -321,7 +560,7 @@ export function createSupervisor(deps = {}) {
             };
             server.once('error', onError);
             server.once('listening', onListening);
-            server.listen(port);
+            server.listen(port, host);
         });
 
         // port:0 asks the OS to pick a free port; reflect the port it
@@ -336,7 +575,7 @@ export function createSupervisor(deps = {}) {
         // process; log and keep serving.
         server.on('error', (err) => logError('[supervisor] server error:', err));
 
-        log(`[supervisor] listening on http://localhost:${port} (pid ${process.pid})`);
+        log(`[supervisor] listening on http://${host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host}:${port} (pid ${process.pid})`);
         return { port };
     }
 
@@ -350,5 +589,9 @@ export function createSupervisor(deps = {}) {
         get port() { return port; },
         /** Resolves once the supervisor has fully shut down. */
         get shutdownRequested() { return shutdownRequested; },
+        /** Why the supervisor is exiting: the stop reason, or forced-exit-timeout. Null until stop() runs. */
+        get exitCause() { return forcedExit ? 'forced-exit-timeout' : stopReason; },
+        /** Names of seams whose stop() exceeded its bound during shutdown. */
+        get hungSeams() { return [...hungSeams]; },
     };
 }

@@ -52,8 +52,18 @@ function buildGatedFleetApi({ onFirstCommand } = {}) {
                 fired = true;
                 if (onFirstCommand) await onFirstCommand();
             }
+            // The beads identity precondition's `bd where --json` probe
+            // (mirrored from runner-arg-contract.test.mjs's spy): answer a
+            // consistent database so the check passes.
+            if (/^bd where --json$/.test(opts.command)) {
+                return mockCmdResult(0, JSON.stringify({ database_path: '/spy/.beads/dolt', path: '/spy/.beads', prefix: 'bd', schema_version: 1 }));
+            }
             if (/^bd list --all --limit 0 --json$/.test(opts.command)) {
-                return mockCmdResult(0, ONE_BEAD_JSON);
+                // Target must be visible (TARGET_NOT_VISIBLE is unconditional).
+                return mockCmdResult(0, JSON.stringify([
+                    ...JSON.parse(ONE_BEAD_JSON),
+                    { id: 'bd-1', status: 'open', title: 'Target' },
+                ]));
             }
             if (/^bd list .*--ready/.test(opts.command)) {
                 // apra-fleet-eft.6.7 (mirrored from runner-arg-contract.test.mjs's
@@ -71,6 +81,10 @@ function buildGatedFleetApi({ onFirstCommand } = {}) {
             }
             if (/^git remote get-url origin\b/.test(opts.command)) {
                 return mockCmdResult(0, 'https://github.com/mock-org/mock-repo.git');
+            }
+            // Review diff base: the engine needs a commit SHA back.
+            if (/^git merge-base origin\/\S+ \S+\s*$/.test(opts.command)) {
+                return mockCmdResult(0, 'c0ffee0000000000000000000000000000c0ffee');
             }
             return mockCmdResult(0, '');
         },
@@ -147,7 +161,7 @@ describe('runner.js main(): sprint-lock wiring (apra-fleet-eft.75.2)', () => {
         // must fail fast with the distinct named error, never silently
         // proceed.
         assert.throws(
-            () => acquireSprintLock({ branch, members, lockDir }),
+            () => acquireSprintLock({ branch, members, lockDir, readCommandLine: () => `node fleet-sprint/bin/cli.mjs --branch ${branch}` }),
             (err) => err instanceof SprintLockHeldError && err.code === 'SPRINT_LOCK_HELD',
         );
 
